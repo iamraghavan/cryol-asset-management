@@ -95,6 +95,7 @@ func installService(ctx context.Context, log *slog.Logger, args []string) (resul
 	ca := fs.String("ca", "", "optional organization CA certificate")
 	interval := fs.Duration("interval", 5*time.Minute, "inventory scan interval")
 	local := fs.Bool("local-http", false, "allow an explicit same-computer development connection")
+	showToken := fs.Bool("show-token", false, "show enrollment input while typing or pasting")
 	pause := fs.Bool("pause", false, "keep the elevated setup window open after installation")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -211,7 +212,11 @@ func installService(ctx context.Context, log *slog.Logger, args []string) (resul
 			_ = eventlog.Remove(serviceName)
 		}
 	}()
-	if err := runInventory(ctx, log, append([]string{"enroll"}, runArgs...)); err != nil {
+	enrollArgs := append([]string{"enroll"}, runArgs...)
+	if *showToken {
+		enrollArgs = append(enrollArgs, "-show-token")
+	}
+	if err := runInventory(ctx, log, enrollArgs); err != nil {
 		return err
 	}
 

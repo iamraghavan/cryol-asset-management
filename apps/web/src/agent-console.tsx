@@ -96,7 +96,7 @@ function Enroll({ close }: { close: () => void }) {
             </div>
           </li>
           <li>Generate a token. On Windows, double-click <strong>Start Cryol Agent.cmd</strong> and approve the administrator prompt. On Linux, run <code>sh start-cryol-agent.sh</code> in the extracted folder.</li>
-          <li>Paste the token when prompted, then check <strong>Last scan</strong> in Cryol. The Windows agent runs in the background and starts at boot. On Linux, keep the terminal open.</li>
+          <li>Paste the token when prompted and press Enter. On Windows it appears as you type. Then check <strong>Last scan</strong> in Cryol. The Windows agent runs in the background and starts at boot. On Linux, keep the terminal open.</li>
         </ol>
       </> : setup.data && <p>Setup downloads are unavailable at this address. Use your HTTPS console address or the configured local test console.</p>}
       {credential && <>

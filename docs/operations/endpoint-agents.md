@@ -44,3 +44,7 @@ The Windows binary was cross-built. Native installation, UAC interaction, startu
 A bundle downloaded through `http://127.0.0.1:8080` points to the machine running that bundle. For a separate Windows PC or VM, open the Cryol console on that endpoint through the server's reachable HTTPS address and download a fresh `cryol-agent-windows-service-x64.zip`. An older ZIP or extracted launcher keeps the address it was generated with.
 
 Bind Cryol to a reachable LAN IP and set `CRYOL_TLS_CERT` and `CRYOL_TLS_KEY`. The TLS certificate must cover the exact DNS name or IP used in the console URL. On Windows, open `https://HOST:PORT/api/v1/system/readiness` in a browser before downloading. If the browser cannot reach it, check the server listener, private-network firewall, VM networking and certificate trust. Matching the certificate and trusting its issuer are separate checks. The new launcher checks readiness before prompting for the one-use token.
+
+The Windows setup launcher displays the token as you type or paste it. Press Enter to submit it. Direct CLI enrollment hides the input unless launched with `-show-token`. The setup ZIP contains no enrollment token.
+
+For a console opened locally on the server, set `CRYOL_AGENT_SETUP_ORIGIN=https://HOST:PORT` to generate bundles using the endpoint-facing address. Set `CRYOL_AGENT_SETUP_CA` to the public CA PEM to include that certificate automatically. The bundle accepts only public CA certificates. A server TLS private key is never a valid setup CA file.

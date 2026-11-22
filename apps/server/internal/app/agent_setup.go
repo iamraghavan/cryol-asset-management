@@ -2,7 +2,11 @@ package app
 
 import (
 	"archive/zip"
+	"bytes"
 	"crypto/sha256"
+	"crypto/x509"
+	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -35,6 +39,14 @@ func agentLoopbackHTTP(r *http.Request) bool {
 }
 
 func setupOrigin(r *http.Request) (string, bool) {
+	if configured := os.Getenv("CRYOL_AGENT_SETUP_ORIGIN"); configured != "" {
+		origin, err := url.Parse(configured)
+		if err != nil || origin.Scheme != "https" || !setupHost.MatchString(origin.Host) || origin.Hostname() == "" ||
+			origin.User != nil || (origin.Path != "" && origin.Path != "/") || origin.RawQuery != "" || origin.Fragment != "" || origin.ForceQuery {
+			return "", false
+		}
+		return "https://" + origin.Host, true
+	}
 	if !setupHost.MatchString(r.Host) {
 		return "", false
 	}
@@ -83,7 +95,7 @@ func openSetupBinary(platform string) (*os.File, error) {
 func setupOptions(w http.ResponseWriter, r *http.Request) {
 	origin, ok := setupOrigin(r)
 	platforms := []string{}
-	if ok {
+	if _, err := setupCA(); ok && err == nil {
 		for _, platform := range []string{"windows", "linux"} {
 			if file, err := openSetupBinary(platform); err == nil {
 				file.Close()
@@ -99,6 +111,11 @@ func serveSetup(w http.ResponseWriter, r *http.Request) {
 	origin, ok := setupOrigin(r)
 	if !ok {
 		fail(w, r, 409, "SETUP_ORIGIN_UNAVAILABLE", "Open Cryol through its HTTPS address or an enabled localhost test address.")
+		return
+	}
+	ca, err := setupCA()
+	if err != nil {
+		fail(w, r, 503, "SETUP_CA_UNAVAILABLE", "The setup CA must contain only public CA certificates.")
 		return
 	}
 	file, err := openSetupBinary(platform)
@@ -129,7 +146,55 @@ func serveSetup(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
-	_, _ = io.Copy(entry, file)
+	if _, err = io.Copy(entry, file); err != nil {
+		return
+	}
+	if len(ca) > 0 {
+		entry, err = archive.Create("cryol-ca.pem")
+		if err == nil {
+			_, _ = entry.Write(ca)
+		}
+	}
+}
+
+func setupCA() ([]byte, error) {
+	path := os.Getenv("CRYOL_AGENT_SETUP_CA")
+	if path == "" {
+		return nil, nil
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	const max = 128 << 10
+	raw, err := io.ReadAll(io.LimitReader(file, max+1))
+	if err != nil || len(raw) > max {
+		return nil, errors.New("invalid setup CA file")
+	}
+	var output bytes.Buffer
+	for data := bytes.TrimSpace(raw); len(data) > 0; data = bytes.TrimSpace(data) {
+		if !bytes.HasPrefix(data, []byte("-----BEGIN CERTIFICATE-----")) {
+			return nil, errors.New("invalid setup CA block")
+		}
+		block, rest := pem.Decode(data)
+		if block == nil || block.Type != "CERTIFICATE" || len(block.Headers) != 0 {
+			return nil, errors.New("invalid setup CA block")
+		}
+		certificate, err := x509.ParseCertificate(block.Bytes)
+		if err != nil || !certificate.IsCA {
+			return nil, errors.New("invalid public CA certificate")
+		}
+		// Encode only the parsed public certificate, never the raw input file.
+		if err := pem.Encode(&output, &pem.Block{Type: "CERTIFICATE", Bytes: certificate.Raw}); err != nil {
+			return nil, err
+		}
+		data = rest
+	}
+	if output.Len() == 0 {
+		return nil, errors.New("empty setup CA bundle")
+	}
+	return output.Bytes(), nil
 }
 
 func setupLauncher(platform, origin string) (string, string) {
@@ -139,7 +204,7 @@ func setupLauncher(platform, origin string) (string, string) {
 		local = " -local-http"
 	}
 	if platform == "windows" {
-		main := `"%~dp0cryol-agent.exe" install-service -server "` + origin + `" -interval 5m` + local
+		main := `"%~dp0cryol-agent.exe" install-service -server "` + origin + `" -interval 5m -show-token` + local
 		script := "@echo off\r\nsetlocal DisableDelayedExpansion\r\necho Cryol Endpoint Inventory setup\r\necho Approve the Windows administrator prompt, then paste the enrollment token.\r\nif exist \"%~dp0cryol-ca.pem\" (\r\n  " + main + " -ca \"%~dp0cryol-ca.pem\" -pause\r\n) else (\r\n  " + main + " -pause\r\n)\r\nif errorlevel 1 pause\r\n"
 		return "Start Cryol Agent.cmd", script
 	}

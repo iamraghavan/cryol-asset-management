@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -66,6 +68,7 @@ func runInventory(ctx context.Context, log *slog.Logger, args []string) error {
 	caFile := fs.String("ca", "", "PEM file for an internal certificate authority")
 	stateDir := fs.String("state-dir", "", "dedicated service-account state directory")
 	localHTTP := fs.Bool("local-http", false, "allow HTTP only for a same-machine loopback test")
+	showToken := fs.Bool("show-token", false, "show enrollment input in an interactive console")
 	interval := fs.Duration("interval", 24*time.Hour, "inventory scan interval")
 	if len(args) == 0 {
 		return errors.New("usage: cryol-agent setup|enroll|scan|run -server https://HOST -state-dir DIR [-ca file]")
@@ -137,16 +140,14 @@ func runInventory(ctx context.Context, log *slog.Logger, args []string) error {
 		if err := checkEnrollmentServer(ctx, client, origin); err != nil {
 			return err
 		}
-		fmt.Fprint(os.Stderr, "Enrollment token: ")
-		token, err := term.ReadPassword(fd)
-		fmt.Fprintln(os.Stderr)
+		token, err := promptEnrollmentToken(os.Stdin, os.Stderr, fd, *showToken)
 		if err != nil {
 			return err
 		}
 		defer clear(token)
 		id := identity{InstallationID: inventory.NewID(), Server: base}
 		request, _ := json.Marshal(map[string]string{"installationId": id.InstallationID})
-		body, err := post(ctx, client, base, "enroll", strings.TrimSpace(string(token)), request)
+		body, err := post(ctx, client, base, "enroll", string(bytes.TrimSpace(token)), request)
 		if err != nil {
 			return err
 		}
@@ -209,6 +210,35 @@ func runInventory(ctx context.Context, log *slog.Logger, args []string) error {
 			}
 		}
 	}
+}
+
+func promptEnrollmentToken(in io.Reader, out io.Writer, fd int, visible bool) ([]byte, error) {
+	var input []byte
+	var err error
+	if visible {
+		fmt.Fprint(out, "Paste enrollment token (visible), then press Enter: ")
+		input, err = bufio.NewReaderSize(in, 128).ReadSlice('\n')
+	} else {
+		fmt.Fprint(out, "Enrollment token (input hidden), then press Enter: ")
+		input, err = term.ReadPassword(fd)
+		fmt.Fprintln(out)
+	}
+	if err != nil || !validEnrollmentToken(input) {
+		clear(input)
+		return nil, errors.New("paste the full enrollment token from the Cryol console and press Enter")
+	}
+	return input, nil
+}
+
+func validEnrollmentToken(input []byte) bool {
+	token := bytes.TrimSpace(input)
+	if len(token) != 43 {
+		return false
+	}
+	var decoded [32]byte
+	defer clear(decoded[:])
+	n, err := base64.RawURLEncoding.Strict().Decode(decoded[:], token)
+	return err == nil && n == len(decoded)
 }
 
 func checkEnrollmentServer(ctx context.Context, client *http.Client, origin *url.URL) error {

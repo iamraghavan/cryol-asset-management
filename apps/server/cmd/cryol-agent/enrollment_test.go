@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -31,5 +32,24 @@ func TestCheckEnrollmentServer(t *testing.T) {
 				t.Fatalf("missing loopback troubleshooting: %v", err)
 			}
 		})
+	}
+}
+
+func TestVisibleEnrollmentInput(t *testing.T) {
+	const token = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+	for _, input := range []string{token + "\r\n", "  " + token + "  \n"} {
+		var prompt strings.Builder
+		got, err := promptEnrollmentToken(strings.NewReader(input), &prompt, 0, true)
+		if err != nil || strings.TrimSpace(string(got)) != token {
+			t.Fatalf("pasted token rejected: %v", err)
+		}
+		if !strings.Contains(prompt.String(), "visible") || strings.Contains(prompt.String(), token) {
+			t.Fatal("the prompt must describe visibility without printing the token itself")
+		}
+	}
+	for _, input := range []string{"not-a-token\n", strings.Repeat("A", 200) + "\n"} {
+		if _, err := promptEnrollmentToken(strings.NewReader(input), io.Discard, 0, true); err == nil {
+			t.Fatal("invalid input accepted")
+		}
 	}
 }

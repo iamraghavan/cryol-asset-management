@@ -59,7 +59,7 @@ func TestSetupBundleOriginAndContents(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !strings.Contains(string(source), "install-service") || !strings.Contains(string(source), example.origin) || strings.Contains(string(source), "-local-http") != example.local {
+			if !strings.Contains(string(source), "install-service") || !strings.Contains(string(source), "-show-token") || !strings.Contains(string(source), example.origin) || strings.Contains(string(source), "-local-http") != example.local {
 				t.Fatalf("launcher origin or local test mode is incorrect")
 			}
 		})
@@ -74,5 +74,25 @@ func TestSetupBundleOriginAndContents(t *testing.T) {
 	r.Host = `cryol.test" & unwanted`
 	if _, ok := setupOrigin(r); ok {
 		t.Fatal("unsafe host accepted")
+	}
+}
+
+func TestConfiguredSetupOriginAndInvalidCA(t *testing.T) {
+	r := httptest.NewRequest("GET", "http://localhost:8080/setup/windows", nil)
+	t.Setenv("CRYOL_AGENT_SETUP_ORIGIN", "https://192.0.2.3:8443")
+	if origin, ok := setupOrigin(r); !ok || origin != "https://192.0.2.3:8443" {
+		t.Fatalf("configured endpoint address was not used: %q", origin)
+	}
+	t.Setenv("CRYOL_AGENT_SETUP_ORIGIN", "http://192.0.2.3:8443")
+	if _, ok := setupOrigin(r); ok {
+		t.Fatal("HTTP override was allowed")
+	}
+	file := filepath.Join(t.TempDir(), "private.pem")
+	if err := os.WriteFile(file, []byte("-----BEGIN PRIVATE KEY-----\nAA==\n-----END PRIVATE KEY-----\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CRYOL_AGENT_SETUP_CA", file)
+	if ca, err := setupCA(); err == nil || len(ca) > 0 {
+		t.Fatal("non-certificate block was accepted")
 	}
 }
