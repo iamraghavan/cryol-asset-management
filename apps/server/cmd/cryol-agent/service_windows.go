@@ -194,15 +194,7 @@ func installService(ctx context.Context, log *slog.Logger, args []string) (resul
 	defer manager.Disconnect()
 	if service, err := manager.OpenService(serviceName); err == nil {
 		defer service.Close()
-		status, err := service.Query()
-		if err != nil {
-			return err
-		}
-		if status.State == svc.Running {
-			fmt.Println("Cryol Agent is already running. Check Last scan in the Cryol console.")
-			return nil
-		}
-		return errors.New("Cryol Agent is already installed. Use Windows Services to start it or uninstall it before reinstalling")
+		return repairInstalledService(ctx, service, root, source)
 	} else if !errors.Is(err, windows.ERROR_SERVICE_DOES_NOT_EXIST) {
 		return err
 	}
@@ -287,15 +279,7 @@ func installService(ctx context.Context, log *slog.Logger, args []string) (resul
 	}
 	// Keep the enrolled identity if Windows cannot start the service immediately.
 	retain = true
-	if err := service.Start(); err != nil {
-		return fmt.Errorf("agent enrolled, but Windows could not start the service: %w", err)
-	}
-	if err := waitForService(ctx, service, svc.Running); err != nil {
-		return err
-	}
-	fmt.Println("Cryol Agent is enrolled and running in the background.")
-	fmt.Println("Open Endpoint agents in Cryol and check Last scan for the first inventory.")
-	return nil
+	return startAndVerifyInventory(ctx, service, state)
 }
 
 func archivePreviousInstall(root string, allowed bool) (string, error) {
@@ -469,8 +453,12 @@ func repairService(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	unlock, err := lockAgent(filepath.Join(programs, "Cryol Agent Setup.lock"))
+	if err != nil {
+		return fmt.Errorf("another Cryol setup may be active: %w", err)
+	}
+	defer unlock()
 	root := filepath.Join(programs, "Cryol Agent")
-	expected := filepath.Join(root, "cryol-agent.exe")
 	manager, err := mgr.Connect()
 	if err != nil {
 		return err
@@ -481,6 +469,16 @@ func repairService(ctx context.Context) error {
 		return fmt.Errorf("open CryolAgent for repair: %w", err)
 	}
 	defer service.Close()
+	source, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	return repairInstalledService(ctx, service, root, source)
+}
+
+func repairInstalledService(ctx context.Context, service *mgr.Service, root, source string) error {
+	expected := filepath.Join(root, "cryol-agent.exe")
+	stateDir := filepath.Join(root, "state")
 	commandLine, account, serviceType, err := readServiceIdentity(service.Handle)
 	if err != nil {
 		return fmt.Errorf("read CryolAgent configuration: %w", err)
@@ -490,11 +488,21 @@ func repairService(ctx context.Context) error {
 		!strings.EqualFold(account, `NT AUTHORITY\LocalService`) || serviceType != windows.SERVICE_WIN32_OWN_PROCESS {
 		return errors.New("this service does not match the expected Cryol installation and was left unchanged")
 	}
-	if info, err := os.Lstat(expected); err != nil || !info.Mode().IsRegular() {
-		return errors.New("the installed Cryol executable is missing or invalid. Check the endpoint security report before reinstalling")
+	for _, dir := range []string{root, stateDir} {
+		path, err := windows.UTF16PtrFromString(dir)
+		if err != nil {
+			return err
+		}
+		attributes, err := windows.GetFileAttributes(path)
+		if err != nil || attributes&windows.FILE_ATTRIBUTE_DIRECTORY == 0 || attributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+			return fmt.Errorf("Cryol repair requires a local installation directory: %s", dir)
+		}
 	}
-	if info, err := os.Lstat(filepath.Join(root, "state", "identity.json")); err != nil || !info.Mode().IsRegular() {
-		return errors.New("the enrolled agent state is missing. Repair cannot restore a missing device credential")
+	if info, err := os.Lstat(filepath.Join(stateDir, "identity.json")); err != nil || !info.Mode().IsRegular() {
+		return errors.New("the local device credential is missing. Unregister the broken service and use Setup's archive and enroll option with a fresh token")
+	}
+	if _, err := ensureServiceEventSource(); err != nil {
+		return fmt.Errorf("restore Windows event log source: %w", err)
 	}
 	if err := configureServiceStartup(service); err != nil {
 		return err
@@ -506,22 +514,71 @@ func repairService(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if status.State == svc.StopPending {
+	if status.State == svc.StartPending {
+		if err := waitForService(ctx, service, svc.Running); err != nil {
+			return err
+		}
+		status.State = svc.Running
+	}
+	if status.State != svc.Stopped {
+		if status.State != svc.StopPending {
+			if _, err := service.Control(svc.Stop); err != nil && !errors.Is(err, windows.ERROR_SERVICE_NOT_ACTIVE) {
+				return fmt.Errorf("stop CryolAgent for repair: %w", err)
+			}
+		}
 		if err := waitForService(ctx, service, svc.Stopped); err != nil {
 			return err
 		}
-		status.State = svc.Stopped
 	}
-	if status.State == svc.Stopped {
-		if err := service.Start(); err != nil {
-			return fmt.Errorf("service settings repaired, but Windows could not start CryolAgent: %w", err)
+	if !strings.EqualFold(filepath.Clean(source), expected) {
+		// Stage beside the installed executable, then replace it on the same volume.
+		staged := expected + ".setup-" + inventory.NewID()
+		defer os.Remove(staged)
+		if err := copySetupFile(source, staged, 64<<20); err != nil {
+			_ = service.Start()
+			return fmt.Errorf("stage the Cryol agent update: %w", err)
 		}
+		if err := os.Rename(staged, expected); err != nil {
+			_ = service.Start()
+			return fmt.Errorf("replace the Cryol agent executable: %w", err)
+		}
+	}
+	return startAndVerifyInventory(ctx, service, stateDir)
+}
+
+func startAndVerifyInventory(ctx context.Context, service *mgr.Service, stateDir string) error {
+	receipt := filepath.Join(stateDir, inventoryReceipt)
+	if err := os.Remove(receipt); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("reset the Cryol upload acknowledgement: %w", err)
+	}
+	if err := service.Start(); err != nil && !errors.Is(err, windows.ERROR_SERVICE_ALREADY_RUNNING) {
+		return fmt.Errorf("Windows could not start CryolAgent: %w", err)
 	}
 	if err := waitForService(ctx, service, svc.Running); err != nil {
 		return err
 	}
-	fmt.Println("Cryol Endpoint Inventory is running. The service description and Automatic startup were verified.")
-	return nil
+	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
+	defer cancel()
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if info, err := os.Lstat(receipt); err == nil && info.Mode().IsRegular() {
+			fmt.Println("Cryol Endpoint Inventory is running and the server accepted an inventory report.")
+			return nil
+		}
+		status, err := service.Query()
+		if err != nil {
+			return err
+		}
+		if status.State == svc.Stopped {
+			return errors.New("CryolAgent stopped before uploading inventory. Check the CryolAgent source in Windows Event Viewer for credential, certificate or collector errors")
+		}
+		select {
+		case <-ctx.Done():
+			return errors.New("CryolAgent started, but the server has not confirmed an inventory upload. The service remains installed. Check the server address and the CryolAgent source in Windows Event Viewer")
+		case <-ticker.C:
+		}
+	}
 }
 
 type inventoryService struct{ args []string }

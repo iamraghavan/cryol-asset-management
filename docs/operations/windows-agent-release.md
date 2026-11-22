@@ -18,7 +18,7 @@ Test enrollment, first inventory, service reboot, UI cancellation, denied UAC, i
 
 ## Repair a registered service
 
-Run the new setup wizard on Windows and select **Repair existing Cryol service**. This option restores the Cryol display name, plain-text description, Automatic startup and bounded restart settings, then verifies the service is running. It reuses existing enrollment and requires no new token. It checks the service path and account first. A missing executable or enrollment file stops repair. Review the endpoint protection report if the binary is missing.
+Run the new setup wizard on Windows and select **Repair existing Cryol service**. This option restores the Cryol display name, plain-text description, Automatic startup and bounded restart settings, then replaces the installed executable, restarts the service and waits for Cryol to accept an inventory upload. It preserves the existing server address, CA and enrollment, and requires no new token. Setup verifies the service path and account before making changes. It can restore a missing executable, but a missing or revoked credential requires fresh enrollment. If endpoint protection quarantined the executable, review the detection with your security administrator. If an upload times out, the service remains installed and retries transient failures. Check the CryolAgent source in Event Viewer and Last scan in the console.
 
 Installer file details and Windows Apps & Features use the developer label **Raghavan - Cryol**. UAC verified publisher still depends on a trusted Authenticode signature issued to the signing identity.
 

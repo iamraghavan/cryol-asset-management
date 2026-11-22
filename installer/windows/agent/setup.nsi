@@ -15,10 +15,10 @@ SetCompressor /SOLID lzma
   !define OUTPUT_EXE "Cryol-Agent-Setup-x64.exe"
 !endif
 !ifndef PRODUCT_VERSION
-  !define PRODUCT_VERSION "0.3.1"
+  !define PRODUCT_VERSION "0.3.2"
 !endif
 !ifndef FILE_VERSION
-  !define FILE_VERSION "0.3.1.0"
+  !define FILE_VERSION "0.3.2.0"
 !endif
 !ifndef DEFAULT_SERVER
   !define DEFAULT_SERVER ""
@@ -45,7 +45,7 @@ VIAddVersionKey /LANG=1033 "OriginalFilename" "Cryol-Agent-Setup-x64.exe"
 !define MUI_WELCOMEPAGE_TITLE "Cryol Endpoint Inventory"
 !define MUI_WELCOMEPAGE_TEXT "Developer: ${PRODUCT_PUBLISHER}$\r$\n$\r$\nSet up an endpoint or repair an existing Cryol service. Cryol collects authorized hardware, installed-software and network inventory."
 !define MUI_FINISHPAGE_TITLE "Cryol agent setup complete"
-!define MUI_FINISHPAGE_TEXT "Cryol Endpoint Inventory runs as a Windows service and starts automatically at boot.$\r$\n$\r$\nOn the server, open Endpoint agents and check Last scan to confirm the first report arrived."
+!define MUI_FINISHPAGE_TEXT "Cryol Endpoint Inventory runs as a Windows service and starts automatically at boot.$\r$\n$\r$\nCryol accepted an inventory report. Open Endpoint agents and check Last scan to view the result."
 
 !insertmacro MUI_PAGE_WELCOME
 Page custom OperationPage OperationLeave
@@ -115,7 +115,7 @@ Function OperationPage
   Pop $0
   ${NSD_CreateRadioButton} 0 51u 100% 14u "Repair existing Cryol service"
   Pop $RepairRadio
-  ${NSD_CreateLabel} 12u 70u 95% 34u "Restore the description, Automatic startup, and recovery settings. The existing executable and enrollment are kept."
+  ${NSD_CreateLabel} 12u 70u 95% 34u "Update the executable, restore Automatic startup, and confirm inventory upload. The existing enrollment is kept."
   Pop $0
   ${If} $HasService == "0"
     EnableWindow $RepairRadio 0
@@ -298,7 +298,7 @@ Section "Install Cryol Endpoint Inventory"
   Call StageSetupFiles
   ${If} $Mode == "repair"
     DetailPrint "Checking the existing service and restoring Automatic startup..."
-    nsExec::ExecToStack /TIMEOUT=45000 '"$PLUGINSDIR\cryol-agent.exe" repair-service'
+    nsExec::ExecToStack /TIMEOUT=110000 '"$PLUGINSDIR\cryol-agent.exe" repair-service'
     Pop $1
     Pop $2
     Goto checkresult
@@ -330,9 +330,9 @@ Section "Install Cryol Endpoint Inventory"
   ${EndIf}
   DetailPrint "Connecting and installing the Cryol service..."
   ${If} $ArchivePrevious == "1"
-    nsExec::ExecToStack /TIMEOUT=90000 '"$PLUGINSDIR\cryol-agent.exe" install-service -installer-input -archive-existing'
+    nsExec::ExecToStack /TIMEOUT=150000 '"$PLUGINSDIR\cryol-agent.exe" install-service -installer-input -archive-existing'
   ${Else}
-    nsExec::ExecToStack /TIMEOUT=90000 '"$PLUGINSDIR\cryol-agent.exe" install-service -installer-input'
+    nsExec::ExecToStack /TIMEOUT=150000 '"$PLUGINSDIR\cryol-agent.exe" install-service -installer-input'
   ${EndIf}
   Pop $1
   Pop $2

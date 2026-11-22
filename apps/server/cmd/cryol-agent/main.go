@@ -216,6 +216,9 @@ func runInventoryWithEnrollment(ctx context.Context, log *slog.Logger, args []st
 				delay = min(delay*2, time.Hour)
 			} else {
 				log.Info("inventory synchronized")
+				if err := atomicWrite(filepath.Join(*stateDir, inventoryReceipt), []byte(time.Now().UTC().Format(time.RFC3339Nano))); err != nil {
+					log.Warn("could not record inventory upload acknowledgement", "error", err)
+				}
 				delay = time.Minute
 				next.Reset(*interval + time.Duration(rand.Int64N(int64(*interval/10))))
 			}
@@ -384,6 +387,8 @@ func post(ctx context.Context, client *http.Client, origin, action, token string
 	}
 	return io.ReadAll(io.LimitReader(response.Body, 8192))
 }
+
+const inventoryReceipt = "last-inventory-upload"
 
 func syncInventory(ctx context.Context, client *http.Client, id identity, dir string) error {
 	queue := filepath.Join(dir, "pending.json")
