@@ -19,12 +19,21 @@ import (
 	"golang.org/x/sys/windows/svc/mgr"
 )
 
-const serviceName = "CryolAgent"
+const (
+	serviceName        = "CryolAgent"
+	serviceDisplayName = "Cryol Endpoint Inventory"
+	serviceDescription = "Collects authorized hardware, installed-software and network inventory and reports it to your organization's Cryol server."
+)
 
 func platformCommand(ctx context.Context, log *slog.Logger, args []string) (bool, error) {
 	switch args[0] {
 	case "install-service":
 		return true, installService(ctx, log, args[1:])
+	case "repair-service":
+		if len(args) != 1 {
+			return true, errors.New("usage: cryol-agent repair-service")
+		}
+		return true, repairService(ctx)
 	case "uninstall-service":
 		if len(args) != 1 {
 			return true, errors.New("usage: cryol-agent uninstall-service")
@@ -213,8 +222,8 @@ func installService(ctx context.Context, log *slog.Logger, args []string) (resul
 		runArgs = append(runArgs, "-ca", cert)
 	}
 	service, err := manager.CreateService(serviceName, executable, mgr.Config{
-		DisplayName:      "Cryol Endpoint Inventory",
-		Description:      "Reports authorized hardware, software and network inventory to the organization's Cryol server.",
+		DisplayName:      serviceDisplayName,
+		Description:      serviceDescription,
 		StartType:        mgr.StartManual,
 		ServiceStartName: `NT AUTHORITY\LocalService`,
 	}, append([]string{"service"}, runArgs...)...)
@@ -227,7 +236,7 @@ func installService(ctx context.Context, log *slog.Logger, args []string) (resul
 			_ = service.Delete()
 		}
 	}()
-	if err := service.SetRecoveryActions([]mgr.RecoveryAction{{Type: mgr.ServiceRestart, Delay: 30 * time.Second}, {Type: mgr.ServiceRestart, Delay: 2 * time.Minute}, {Type: mgr.NoAction}}, 86400); err != nil {
+	if err := configureServiceRecovery(service); err != nil {
 		return err
 	}
 	if err := eventlog.InstallAsEventCreate(serviceName, eventlog.Error|eventlog.Warning|eventlog.Info); err != nil {
@@ -246,16 +255,9 @@ func installService(ctx context.Context, log *slog.Logger, args []string) (resul
 		return err
 	}
 
-	configuration, err := service.Config()
-	if err != nil {
+	if err := configureServiceStartup(service); err != nil {
 		retain = true
-		return fmt.Errorf("agent enrolled, but automatic startup could not be configured: %w", err)
-	}
-	configuration.StartType = mgr.StartAutomatic
-	configuration.DelayedAutoStart = true
-	if err := service.UpdateConfig(configuration); err != nil {
-		retain = true
-		return fmt.Errorf("agent enrolled, but automatic startup could not be configured: %w", err)
+		return fmt.Errorf("agent enrolled, but Windows service settings could not be verified: %w", err)
 	}
 	// Keep the enrolled identity if Windows cannot start the service immediately.
 	retain = true
@@ -267,6 +269,130 @@ func installService(ctx context.Context, log *slog.Logger, args []string) (resul
 	}
 	fmt.Println("Cryol Agent is enrolled and running in the background.")
 	fmt.Println("Open Endpoint agents in Cryol and check Last scan for the first inventory.")
+	return nil
+}
+
+func configureServiceStartup(service *mgr.Service) error {
+	display, err := windows.UTF16PtrFromString(serviceDisplayName)
+	if err != nil {
+		return err
+	}
+	// Preserve the installed command line, account, dependencies and credentials.
+	if err := windows.ChangeServiceConfig(service.Handle, windows.SERVICE_NO_CHANGE, windows.SERVICE_AUTO_START,
+		windows.SERVICE_NO_CHANGE, nil, nil, nil, nil, nil, nil, display); err != nil {
+		return err
+	}
+	details, err := windows.UTF16PtrFromString(serviceDescription)
+	if err != nil {
+		return err
+	}
+	description := windows.SERVICE_DESCRIPTION{Description: details}
+	if err := windows.ChangeServiceConfig2(service.Handle, windows.SERVICE_CONFIG_DESCRIPTION, (*byte)(unsafe.Pointer(&description))); err != nil {
+		return fmt.Errorf("restore service description: %w", err)
+	}
+	var delayed windows.SERVICE_DELAYED_AUTO_START_INFO
+	if err := windows.ChangeServiceConfig2(service.Handle, windows.SERVICE_CONFIG_DELAYED_AUTO_START_INFO, (*byte)(unsafe.Pointer(&delayed))); err != nil {
+		return fmt.Errorf("set automatic startup: %w", err)
+	}
+	readback, err := service.Config()
+	if err != nil {
+		return err
+	}
+	if readback.Description != serviceDescription || readback.DisplayName != serviceDisplayName || readback.StartType != mgr.StartAutomatic || readback.DelayedAutoStart {
+		return errors.New("Windows did not report the expected service description and automatic startup")
+	}
+	return nil
+}
+
+func configureServiceRecovery(service *mgr.Service) error {
+	return service.SetRecoveryActions([]mgr.RecoveryAction{
+		{Type: mgr.ServiceRestart, Delay: 30 * time.Second},
+		{Type: mgr.ServiceRestart, Delay: 2 * time.Minute},
+		{Type: mgr.NoAction},
+	}, 86400)
+}
+
+// Check the core service identity without reading its potentially damaged description.
+func readServiceIdentity(handle windows.Handle) (command, account string, serviceType uint32, err error) {
+	var needed uint32
+	err = windows.QueryServiceConfig(handle, nil, 0, &needed)
+	if !errors.Is(err, windows.ERROR_INSUFFICIENT_BUFFER) {
+		if err == nil {
+			err = errors.New("Windows did not report a configuration size")
+		}
+		return "", "", 0, err
+	}
+	if needed < uint32(unsafe.Sizeof(windows.QUERY_SERVICE_CONFIG{})) || needed > 64<<10 {
+		return "", "", 0, errors.New("Windows reported an invalid service configuration size")
+	}
+	buffer := make([]byte, needed)
+	config := (*windows.QUERY_SERVICE_CONFIG)(unsafe.Pointer(&buffer[0]))
+	if err := windows.QueryServiceConfig(handle, config, needed, &needed); err != nil {
+		return "", "", 0, err
+	}
+	return windows.UTF16PtrToString(config.BinaryPathName), windows.UTF16PtrToString(config.ServiceStartName), config.ServiceType, nil
+}
+
+func repairService(ctx context.Context) error {
+	if !windows.GetCurrentProcessToken().IsElevated() {
+		return errors.New("run the Cryol setup wizard as an administrator")
+	}
+	programs, err := windows.KnownFolderPath(windows.FOLDERID_ProgramFiles, 0)
+	if err != nil {
+		return err
+	}
+	root := filepath.Join(programs, "Cryol Agent")
+	expected := filepath.Join(root, "cryol-agent.exe")
+	manager, err := mgr.Connect()
+	if err != nil {
+		return err
+	}
+	defer manager.Disconnect()
+	service, err := manager.OpenService(serviceName)
+	if err != nil {
+		return fmt.Errorf("open CryolAgent for repair: %w", err)
+	}
+	defer service.Close()
+	commandLine, account, serviceType, err := readServiceIdentity(service.Handle)
+	if err != nil {
+		return fmt.Errorf("read CryolAgent configuration: %w", err)
+	}
+	command, err := windows.DecomposeCommandLine(commandLine)
+	if err != nil || len(command) < 2 || !strings.EqualFold(filepath.Clean(command[0]), expected) || command[1] != "service" ||
+		!strings.EqualFold(account, `NT AUTHORITY\LocalService`) || serviceType != windows.SERVICE_WIN32_OWN_PROCESS {
+		return errors.New("this service does not match the expected Cryol installation and was left unchanged")
+	}
+	if info, err := os.Lstat(expected); err != nil || !info.Mode().IsRegular() {
+		return errors.New("the installed Cryol executable is missing or invalid. Check the endpoint security report before reinstalling")
+	}
+	if info, err := os.Lstat(filepath.Join(root, "state", "identity.json")); err != nil || !info.Mode().IsRegular() {
+		return errors.New("the enrolled agent state is missing. Repair cannot restore a missing device credential")
+	}
+	if err := configureServiceStartup(service); err != nil {
+		return err
+	}
+	if err := configureServiceRecovery(service); err != nil {
+		return fmt.Errorf("update service recovery: %w", err)
+	}
+	status, err := service.Query()
+	if err != nil {
+		return err
+	}
+	if status.State == svc.StopPending {
+		if err := waitForService(ctx, service, svc.Stopped); err != nil {
+			return err
+		}
+		status.State = svc.Stopped
+	}
+	if status.State == svc.Stopped {
+		if err := service.Start(); err != nil {
+			return fmt.Errorf("service settings repaired, but Windows could not start CryolAgent: %w", err)
+		}
+	}
+	if err := waitForService(ctx, service, svc.Running); err != nil {
+		return err
+	}
+	fmt.Println("Cryol Endpoint Inventory is running. The service description and Automatic startup were verified.")
 	return nil
 }
 

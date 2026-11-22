@@ -1,6 +1,6 @@
 # Windows agent installer and release
 
-The installer is a native NSIS setup wizard. It collects the reachable HTTPS server address, a masked single-use enrollment token, an optional public CA certificate, and the scan interval. It registers Cryol Endpoint Inventory in Windows Apps & Features. The endpoint service runs in user mode as LocalService, starts automatically after boot, and records service events in Event Viewer. It requires administrator approval for setup. No kernel driver is required.
+The installer is a native NSIS setup wizard. It collects the reachable HTTPS server address, a masked single-use enrollment token, an optional public CA certificate, and the scan interval. It registers Cryol Endpoint Inventory in Windows Apps & Features. The endpoint service runs in user mode as LocalService, uses Automatic startup at boot, and records service events in Event Viewer. It requires administrator approval for setup. No kernel driver is required.
 
 ## Build for a disposable test machine
 
@@ -15,3 +15,9 @@ The one-use token is passed through the elevated installer process environment t
 The display name, icon, product metadata and Apps & Features publisher label are cosmetic release metadata. Windows UAC uses the Authenticode signature for the verified publisher. Sign the inner `cryol-agent.exe` first with an authorized code-signing certificate. Compile the installer with that signed binary, then sign the final installer. Use a trusted timestamp and verify both signatures on Windows with `signtool verify /pa /v <file>`. Generate SHA-256 checksums after signing. Keep private keys in the authorized signing environment. [Microsoft code-signing options](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/code-signing-options) · [Authenticode timestamping](https://learn.microsoft.com/en-us/windows/win32/seccrypto/time-stamping-authenticode-signatures)
 
 Test enrollment, first inventory, service reboot, UI cancellation, denied UAC, invalid token, certificate errors and uninstall on a Windows test machine with endpoint protection enabled. A valid signature identifies the publisher and does not guarantee that a security product will allow the file. When a tool raises an alert, retain the detection name, path, product version, SHA-256 and relevant event details for your security team or vendor. Keep the unsigned developer bundle off affected endpoints while the alert is being investigated.
+
+## Repair a registered service
+
+Run the new setup wizard on Windows and select **Repair existing Cryol service**. This option restores the Cryol display name, plain-text description, Automatic startup and bounded restart settings, then verifies the service is running. It reuses existing enrollment and requires no new token. It checks the service path and account first. A missing executable or enrollment file stops repair. Review the endpoint protection report if the binary is missing.
+
+Installer file details and Windows Apps & Features use the developer label **Raghavan - Cryol**. UAC verified publisher still depends on a trusted Authenticode signature issued to the signing identity.
