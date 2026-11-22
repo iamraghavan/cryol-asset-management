@@ -67,7 +67,7 @@ function Enroll({ close }: { close: () => void }) {
   const [copied, setCopied] = useState(false)
   const setup = useQuery({
     queryKey: ['agents', 'setup'],
-    queryFn: ({ signal }) => request<{ origin: string; platforms: string[]; windowsInstaller: boolean; windowsInstallerTest: boolean; publicCA: boolean }>('/agents/setup', 'GET', undefined, signal),
+    queryFn: ({ signal }) => request<{ origin: string; platforms: string[]; windowsInstaller: boolean; windowsInstallerTest: boolean; windowsInstallerBundledCA: boolean; publicCA: boolean }>('/agents/setup', 'GET', undefined, signal),
     retry: false,
   })
   const issue = useMutation({
@@ -92,12 +92,15 @@ function Enroll({ close }: { close: () => void }) {
           <h3>Windows x64</h3>
           <div className="row-actions">
             <a className="button button-primary" href="/api/v1/agents/setup/windows-installer"><Download size={16} /> Download Windows x64 installer</a>
-            {setup.data.publicCA && <a className="button" href="/api/v1/agents/setup/ca"><Download size={16} /> Public CA certificate</a>}
+            {setup.data.publicCA && !setup.data.windowsInstallerBundledCA && <a className="button" href="/api/v1/agents/setup/ca"><Download size={16} /> Public CA certificate</a>}
           </div>
           {setup.data.windowsInstallerTest && <p role="note"><strong>Unsigned test build.</strong> Use it on a disposable Windows test machine.</p>}
+          {setup.data.windowsInstallerBundledCA
+            ? <p>The installer includes Cryol’s public CA. Setup uses it automatically.</p>
+            : setup.data.publicCA && <p>For this private HTTPS server, select the public CA certificate in the wizard.</p>}
           <ol>
             <li>Run <strong>Cryol-Agent-Setup-x64.exe</strong> and approve the Windows administrator prompt.</li>
-            <li>Enter the server address above and paste a fresh enrollment token. If your server uses a private CA, select the public certificate in the wizard.</li>
+            <li>Check the server address and run <strong>Test connection</strong>. Then paste a fresh enrollment token.</li>
             <li>Check <strong>Last scan</strong> after setup. The Windows service starts automatically at boot.</li>
           </ol>
         </section> : setup.data.platforms.includes('windows') && <section aria-label="Windows setup">

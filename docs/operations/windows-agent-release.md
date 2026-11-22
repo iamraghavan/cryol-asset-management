@@ -48,3 +48,5 @@ A site-specific installer can include the HTTPS server address and public CA:
 - A bundled CA is used within the agent's TLS client. Windows system trust is unchanged. The signed workflow continues to build a generic artifact unless a site-specific signed packaging process is configured. The configured server URL and public CA must be built into the package before signing.
 
 The one-use enrollment token remains separate from reusable downloads. The connection test and service status check do not consume a token.
+
+When serving a verified site-specific installer with an embedded CA, set `CRYOL_WINDOWS_AGENT_INSTALLER_BUNDLED_CA=1`. This tells the console to omit the separate CA download for Windows Setup. It does not add a certificate to an existing EXE.

@@ -114,6 +114,7 @@ func setupOptions(w http.ResponseWriter, r *http.Request) {
 	reply(w, http.StatusOK, map[string]any{
 		"origin": origin, "platforms": platforms, "windowsInstaller": installerAvailable,
 		"windowsInstallerTest": installerAvailable && os.Getenv("CRYOL_WINDOWS_AGENT_INSTALLER_TEST") == "1", "publicCA": caAvailable,
+		"windowsInstallerBundledCA": installerAvailable && os.Getenv("CRYOL_WINDOWS_AGENT_INSTALLER_BUNDLED_CA") == "1",
 	})
 }
 
