@@ -1,0 +1,301 @@
+openapi: 3.1.0
+info:
+  title: Cryol Asset Management API
+  version: 0.1.0
+paths:
+  /api/v1/system/health:
+    get:
+      operationId: getHealth
+      responses:
+        '200':
+          description: The HTTP process is alive
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status: {const: alive}
+  /api/v1/system/readiness:
+    get:
+      operationId: getReadiness
+      responses:
+        '200':
+          description: The database and schema are ready
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status]
+                properties:
+                  status: {const: ready}
+        '503':
+          description: A critical dependency is unavailable
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [error]
+                properties:
+                  error:
+                    type: object
+                    required: [code, message, requestId]
+                    properties:
+                      code: {const: NOT_READY}
+                      message: {type: string}
+                      requestId: {type: string}
+  /api/v1/system/version:
+    get:
+      operationId: getVersion
+      responses:
+        '200':
+          description: Application build version
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [version]
+                properties:
+                  version: {type: string}
+  /api/v1/auth/login:
+    post:
+      operationId: login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, password]
+              properties:
+                username: {type: string}
+                password: {type: string, format: password}
+      responses:
+        '200':
+          description: Signed in and session cookie issued
+        '401':
+          description: Invalid credentials
+        '429':
+          description: Sign-in limit reached
+  /api/v1/auth/logout:
+    post:
+      operationId: logout
+      responses:
+        '200':
+          description: Session revoked and cookie cleared
+  /api/v1/auth/me:
+    get:
+      operationId: currentUser
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Current username, user identifier and permissions
+        '401':
+          description: Authentication required
+  /api/v1/organization/profile:
+    get:
+      operationId: getOrganizationProfile
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Organization profile or initial settings
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrganizationProfile'
+        '401':
+          description: Authentication required
+        '403':
+          description: Profile read permission required
+    put:
+      operationId: updateOrganizationProfile
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OrganizationProfile'
+      responses:
+        '200':
+          description: Updated profile
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/OrganizationProfile'
+        '401':
+          description: Authentication required
+        '403':
+          description: Profile management permission and same-origin request required
+        '422':
+          description: Invalid profile
+  /api/v1/dashboard/summary:
+    get:
+      operationId: getDashboardSummary
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Total, active and archived asset counts
+        '403':
+          description: Asset read permission required
+  /api/v1/assets:
+    get:
+      operationId: listAssets
+      security:
+        - sessionCookie: []
+      parameters:
+        - {name: q, in: query, schema: {type: string, maxLength: 120}}
+        - {name: state, in: query, schema: {type: string, enum: [all, active, archived]}}
+        - {name: sort, in: query, schema: {type: string, enum: [newest, oldest, name, number]}}
+        - {name: manufacturer, in: query, schema: {type: string, maxLength: 120}}
+        - {name: from, in: query, schema: {type: string, format: date}}
+        - {name: to, in: query, schema: {type: string, format: date}}
+        - {name: page, in: query, schema: {type: integer, minimum: 1, maximum: 100000, default: 1}}
+      responses:
+        '200':
+          description: Asset page with items, page and hasNext
+        '400':
+          description: Invalid filter or page
+        '403':
+          description: Asset read permission required
+    post:
+      operationId: createAsset
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AssetInput'
+      responses:
+        '201':
+          description: Registered asset with generated identifier and revision
+        '403':
+          description: Asset create permission required
+        '409':
+          description: Organization setup required
+        '422':
+          description: Invalid asset data
+  /api/v1/assets/{id}:
+    parameters:
+      - $ref: '#/components/parameters/AssetID'
+    get:
+      operationId: getAsset
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: Asset details and 25 most recent audit events
+        '403':
+          description: Asset read permission required
+        '404':
+          description: Asset record missing
+    patch:
+      operationId: updateAsset
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: '#/components/schemas/AssetInput'
+                - $ref: '#/components/schemas/AssetRevision'
+      responses:
+        '200':
+          description: Updated asset
+        '403':
+          description: Asset update permission required
+        '409':
+          description: Record unavailable or revision changed
+        '422':
+          description: Invalid asset data
+  /api/v1/assets/{id}/archive:
+    parameters:
+      - $ref: '#/components/parameters/AssetID'
+    post:
+      operationId: archiveAsset
+      security:
+        - sessionCookie: []
+      requestBody:
+        $ref: '#/components/requestBodies/AssetRevision'
+      responses:
+        '200':
+          description: Archived record with incremented revision
+        '403':
+          description: Asset archive permission required
+        '409':
+          description: Record state or revision changed
+  /api/v1/assets/{id}/restore:
+    parameters:
+      - $ref: '#/components/parameters/AssetID'
+    post:
+      operationId: restoreAsset
+      security:
+        - sessionCookie: []
+      requestBody:
+        $ref: '#/components/requestBodies/AssetRevision'
+      responses:
+        '200':
+          description: Restored record with incremented revision
+        '403':
+          description: Asset archive permission required
+        '409':
+          description: Record state or revision changed
+
+components:
+  parameters:
+    AssetID:
+      name: id
+      in: path
+      required: true
+      schema: {type: string, format: uuid}
+  requestBodies:
+    AssetRevision:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/AssetRevision'
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: cryol_session
+  schemas:
+    OrganizationProfile:
+      type: object
+      additionalProperties: false
+      properties:
+        name: {type: string}
+        address: {type: string}
+        contact: {type: string}
+        timezone: {type: string}
+        currency: {type: string}
+        financialYearMonth: {type: integer, minimum: 1, maximum: 12}
+        assetPrefix: {type: string}
+
+    AssetInput:
+      type: object
+      required: [name]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 200}
+        serial: {type: string, maxLength: 120}
+        manufacturer: {type: string, maxLength: 120}
+        model: {type: string, maxLength: 120}
+        notes: {type: string, maxLength: 4000}
+        purchaseDate:
+          oneOf:
+            - {type: string, format: date}
+            - {const: ''}
+    AssetRevision:
+      type: object
+      required: [revision]
+      properties:
+        revision: {type: integer, minimum: 1}

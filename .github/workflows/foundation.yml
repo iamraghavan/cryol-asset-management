@@ -1,0 +1,52 @@
+name: Foundation checks
+on: [push, pull_request]
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: cryol_test
+          POSTGRES_USER: cryol_test
+          POSTGRES_PASSWORD: ci-only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U cryol_test -d cryol_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    defaults:
+      run:
+        working-directory: apps/server
+    env:
+      CRYOL_TEST_DATABASE_URL: postgres://cryol_test:ci-only@127.0.0.1:5432/cryol_test?sslmode=disable
+      CRYOL_IDENTITY_TEST_DATABASE_URL: postgres://cryol_test:ci-only@127.0.0.1:5432/cryol_identity?sslmode=disable
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: apps/server/go.mod
+          cache-dependency-path: apps/server/go.sum
+      - run: docker exec "${{ job.services.postgres.id }}" createdb -U cryol_test cryol_identity
+      - run: go vet ./...
+      - run: go test -count=1 ./...
+      - run: GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build ./...
+      - run: GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build ./...
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+      - run: corepack pnpm install --frozen-lockfile
+      - run: corepack pnpm lint
+      - run: corepack pnpm test
+      - run: corepack pnpm build

@@ -1,0 +1,321 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"log/slog"
+	"math/rand/v2"
+	"net"
+	"net/http"
+	"net/url"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"syscall"
+	"time"
+
+	"github.com/cryol/cryol-asset-management/apps/server/internal/inventory"
+	"golang.org/x/term"
+)
+
+var version = "dev"
+
+type identity struct {
+	InstallationID string `json:"installationId"`
+	Credential     string `json:"credential"`
+	Server         string `json:"server"`
+}
+
+type httpFailure int
+
+func (failure httpFailure) Error() string {
+	return fmt.Sprintf("inventory server returned HTTP %d", failure)
+}
+
+func main() {
+	log := slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if err := run(ctx, log); err != nil && !errors.Is(err, context.Canceled) {
+		log.Error("agent stopped", "error", err)
+		os.Exit(1)
+	}
+}
+
+func run(ctx context.Context, log *slog.Logger) error {
+	fs := flag.NewFlagSet("cryol-agent", flag.ContinueOnError)
+	server := fs.String("server", "", "Cryol HTTPS server origin")
+	caFile := fs.String("ca", "", "PEM file for an internal certificate authority")
+	stateDir := fs.String("state-dir", "", "dedicated service-account state directory")
+	localHTTP := fs.Bool("local-http", false, "allow HTTP only for a same-machine loopback test")
+	interval := fs.Duration("interval", 24*time.Hour, "inventory scan interval")
+	if len(os.Args) < 2 {
+		return errors.New("usage: cryol-agent setup|enroll|scan|run -server https://HOST -state-dir DIR [-ca file]")
+	}
+	mode := os.Args[1]
+	if err := fs.Parse(os.Args[2:]); err != nil {
+		return err
+	}
+	if (mode != "setup" && mode != "enroll" && mode != "scan" && mode != "run") || fs.NArg() != 0 || *stateDir == "" || *interval < time.Minute {
+		return errors.New("choose setup, enroll, scan or run, provide -state-dir and use a scan interval of at least one minute")
+	}
+	origin, err := url.Parse(*server)
+	if err != nil || (origin.Scheme != "https" && origin.Scheme != "http") || origin.Hostname() == "" || origin.User != nil || (origin.Path != "" && origin.Path != "/") || origin.RawQuery != "" || origin.Fragment != "" || origin.ForceQuery {
+		return errors.New("server must be a valid origin")
+	}
+	if origin.Scheme == "http" && (!*localHTTP || !inventory.IsLoopbackHost(origin.Hostname())) {
+		return errors.New("HTTPS is required except for explicitly enabled same-machine tests")
+	}
+	base := strings.TrimSuffix(origin.String(), "/")
+	client, err := newClient(*caFile)
+	if err != nil {
+		return err
+	}
+	if origin.Scheme == "http" {
+		transport := client.Transport.(*http.Transport)
+		dialer := &net.Dialer{Timeout: 10 * time.Second}
+		transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+			host, port, err := net.SplitHostPort(address)
+			if err != nil || !inventory.IsLoopbackHost(host) {
+				return nil, errors.New("local HTTP destination is not loopback")
+			}
+			if host == "localhost" {
+				for _, ip := range []string{"127.0.0.1", "::1"} {
+					if conn, err := dialer.DialContext(ctx, network, net.JoinHostPort(ip, port)); err == nil {
+						return conn, nil
+					}
+				}
+				return nil, errors.New("Cryol is not reachable on localhost")
+			}
+			return dialer.DialContext(ctx, network, address)
+		}
+	}
+	if err := os.MkdirAll(*stateDir, 0700); err != nil {
+		return err
+	}
+	info, err := os.Stat(*stateDir)
+	if err != nil || !info.IsDir() || (runtime.GOOS != "windows" && info.Mode().Perm()&0077 != 0) {
+		return errors.New("state directory must be accessible only to the service account")
+	}
+	// An exclusive local lock protects enrollment and queued writes from concurrent invocations.
+	lock := filepath.Join(*stateDir, "agent.lock")
+	handle, err := os.OpenFile(lock, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if err != nil {
+		return errors.New("could not acquire agent lock; verify no other agent is active")
+	}
+	defer os.Remove(lock)
+	handle.Close()
+	path := filepath.Join(*stateDir, "identity.json")
+	raw, readErr := os.ReadFile(path)
+	if mode == "enroll" || (mode == "setup" && errors.Is(readErr, os.ErrNotExist)) {
+		if readErr == nil {
+			return errors.New("this state directory already contains an agent identity")
+		}
+		if !errors.Is(readErr, os.ErrNotExist) {
+			return readErr
+		}
+		fd := int(os.Stdin.Fd())
+		if !term.IsTerminal(fd) {
+			return errors.New("enrollment requires an interactive terminal")
+		}
+		fmt.Fprint(os.Stderr, "Enrollment token: ")
+		token, err := term.ReadPassword(fd)
+		fmt.Fprintln(os.Stderr)
+		if err != nil {
+			return err
+		}
+		defer clear(token)
+		id := identity{InstallationID: inventory.NewID(), Server: base}
+		request, _ := json.Marshal(map[string]string{"installationId": id.InstallationID})
+		body, err := post(ctx, client, base, "enroll", strings.TrimSpace(string(token)), request)
+		if err != nil {
+			return err
+		}
+		var result struct{ Credential string }
+		if json.Unmarshal(body, &result) != nil || len(result.Credential) != 43 {
+			return errors.New("invalid enrollment response")
+		}
+		id.Credential = result.Credential
+		raw, err = json.Marshal(id)
+		if err != nil {
+			return err
+		}
+		if err := atomicWrite(path, raw); err != nil {
+			return err
+		}
+		log.Info("agent enrolled", "installation_id", id.InstallationID)
+		if mode == "enroll" {
+			return nil
+		}
+		readErr = nil
+	}
+	var id identity
+	if readErr != nil || json.Unmarshal(raw, &id) != nil || id.Server != base || len(id.Credential) != 43 {
+		return errors.New("enroll this state directory with the same server before scanning")
+	}
+	scan := func() error { return syncInventory(ctx, client, id, *stateDir) }
+	if mode == "scan" {
+		return scan()
+	}
+	heartbeat := time.NewTicker(5 * time.Minute)
+	defer heartbeat.Stop()
+	next := time.NewTimer(0)
+	defer next.Stop()
+	delay := time.Minute
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-heartbeat.C:
+			_, err := post(ctx, client, id.Server, "heartbeat", id.Credential, nil)
+			if permanent(err) {
+				return err
+			}
+			if err != nil {
+				log.Warn("heartbeat failed", "error", err)
+			}
+		case <-next.C:
+			err := scan()
+			if permanent(err) {
+				return err
+			}
+			if err != nil {
+				log.Warn("inventory upload pending", "error", err)
+				next.Reset(delay + time.Duration(rand.Int64N(int64(delay/4))))
+				delay = min(delay*2, time.Hour)
+			} else {
+				log.Info("inventory synchronized")
+				delay = time.Minute
+				next.Reset(*interval + time.Duration(rand.Int64N(int64(*interval/10))))
+			}
+		}
+	}
+}
+
+func permanent(err error) bool {
+	var failure httpFailure
+	return errors.As(err, &failure) && failure >= 400 && failure < 500 && failure != 408 && failure != 429
+}
+
+func newClient(caFile string) (*http.Client, error) {
+	config := &tls.Config{MinVersion: tls.VersionTLS12}
+	if caFile != "" {
+		certs, err := os.ReadFile(caFile)
+		if err != nil {
+			return nil, err
+		}
+		pool, err := x509.SystemCertPool()
+		if err != nil {
+			return nil, err
+		}
+		if !pool.AppendCertsFromPEM(certs) {
+			return nil, errors.New("internal CA file has no recognized certificates")
+		}
+		config.RootCAs = pool
+	}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.TLSClientConfig = config
+	transport.Proxy = nil
+	return &http.Client{Transport: transport, Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, nil
+}
+
+func post(ctx context.Context, client *http.Client, origin, action, token string, body []byte) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, origin+"/api/agent/v1/"+action, bytes.NewReader(body))
+	if err != nil {
+		return nil, errors.New("could not construct inventory request")
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	response, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return nil, httpFailure(response.StatusCode)
+	}
+	return io.ReadAll(io.LimitReader(response.Body, 8192))
+}
+
+func syncInventory(ctx context.Context, client *http.Client, id identity, dir string) error {
+	queue := filepath.Join(dir, "pending.json")
+	body, err := os.ReadFile(queue)
+	if errors.Is(err, os.ErrNotExist) {
+		snap, err := collect(ctx)
+		if err != nil {
+			return err
+		}
+		body, err = json.Marshal(snap)
+		if err != nil {
+			return err
+		}
+		if len(body) > inventory.MaxReportBytes {
+			return errors.New("inventory exceeds the upload limit")
+		}
+		if err := atomicWrite(queue, body); err != nil {
+			return err
+		}
+	} else if err != nil {
+		return err
+	}
+	if _, err := post(ctx, client, id.Server, "inventory", id.Credential, body); err != nil {
+		return err
+	}
+	return os.Remove(queue)
+}
+
+func atomicWrite(path string, data []byte) error {
+	file, err := os.CreateTemp(filepath.Dir(path), ".cryol-")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(file.Name())
+	_, writeErr := file.Write(data)
+	if writeErr == nil {
+		writeErr = file.Sync()
+	}
+	if err := errors.Join(writeErr, file.Close()); err != nil {
+		return err
+	}
+	return os.Rename(file.Name(), path)
+}
+
+func collect(ctx context.Context) (inventory.Snapshot, error) {
+	if runtime.GOOS != "windows" && runtime.GOOS != "linux" {
+		return inventory.Snapshot{}, errors.New("inventory collection is supported on Windows and Linux")
+	}
+	hostname, err := os.Hostname()
+	if err != nil {
+		return inventory.Snapshot{}, err
+	}
+	s := inventory.Snapshot{Version: 1, RunID: inventory.NewID(), AgentVersion: version, Hostname: hostname,
+		OSFamily: runtime.GOOS, Architecture: runtime.GOARCH, LogicalCPUs: runtime.NumCPU(), SoftwareStatus: "unavailable"}
+	if interfaces, err := net.Interfaces(); err == nil {
+		for _, iface := range interfaces {
+			if len(s.Network) >= 256 {
+				break
+			}
+			item := inventory.Adapter{Name: iface.Name, MAC: iface.HardwareAddr.String(), Up: iface.Flags&net.FlagUp != 0}
+			if addresses, err := iface.Addrs(); err == nil {
+				for _, address := range addresses {
+					if _, ok := address.(*net.IPNet); ok && len(item.Addresses) < 128 {
+						item.Addresses = append(item.Addresses, address.String())
+					}
+				}
+			}
+			s.Network = append(s.Network, item)
+		}
+	}
+	collectPlatform(ctx, &s)
+	s.ScannedAt = time.Now().UTC()
+	return s, s.Validate(s.ScannedAt)
+}

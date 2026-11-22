@@ -1,0 +1,12 @@
+{
+  "name": "cryol-asset-management",
+  "private": true,
+  "packageManager": "pnpm@10.28.2",
+  "engines": { "node": ">=22.12.0" },
+  "scripts": {
+    "dev": "corepack pnpm --filter @cryol/web dev",
+    "build": "corepack pnpm --filter @cryol/web build",
+    "lint": "corepack pnpm --filter @cryol/web lint",
+    "test": "corepack pnpm --filter @cryol/web test"
+  }
+}

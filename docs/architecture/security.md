@@ -1,0 +1,7 @@
+# Security architecture
+
+The foundation exposes liveness, readiness and application version. Readiness sends a bounded database query and returns a generic failure status. The listener defaults to loopback. Database credentials stay in the server process. Deployment operators should provide a dedicated database and separate migration and runtime credentials when provisioning those privileges.
+
+Local administrator bootstrap requires access to a terminal and the database. Passwords use individually salted Argon2id with the OWASP baseline of 19 MiB, two iterations and parallelism one. The application stores SHA-256 digests of random 256-bit session tokens. Session cookies are HTTP-only, SameSite Strict, and Secure over HTTPS. Sessions expire after eight hours and are revoked on sign-out. Sign-in work is bounded to four concurrent requests and 60 attempts per minute per process. Mutating identity and profile routes use Go cross-origin request protection. Profile access checks permissions on every request, and profile writes and audit events share an atomic statement.
+
+Production LAN listeners require a certificate and key. The HTTP development listener binds to loopback. Account recovery, managed user provisioning, scoped access, and security hardening remain roadmap work. [OWASP password storage](https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html) · [OWASP session management](https://cheatsheetseries.owasp.org/cheatsheets/Session_Management_Cheat_Sheet.html)
