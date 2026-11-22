@@ -190,7 +190,7 @@ Function EnrollmentPage
   ${NSD_CreateButton} 72% 13u 28% 13u "Test connection"
   Pop $0
   ${NSD_OnClick} $0 TestConnection
-  ${NSD_CreateLabel} 0 34u 100% 12u "One-use token from Endpoint agents > New enrollment"
+  ${NSD_CreateLabel} 0 34u 100% 12u "One-use token from Endpoint agents > Generate token"
   Pop $0
   ${NSD_CreatePassword} 0 47u 100% 13u "$Token"
   Pop $TokenControl

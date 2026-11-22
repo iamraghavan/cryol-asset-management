@@ -1,6 +1,8 @@
 import { expect, test } from '@playwright/test'
 
-test('administrator creates and revokes an unused enrollment token', async ({ page, request }) => {
+test.use({ userAgent: 'Mozilla/5.0 (Linux; Android 15) AppleWebKit/537.36 Mobile Safari/537.36' })
+
+test('administrator can view all agent downloads and manage an enrollment token from a mobile browser', async ({ page, request }) => {
   const { CRYOL_E2E_USERNAME: username, CRYOL_E2E_PASSWORD: password } = process.env
   if (!username || !password) throw new Error('Configure disposable Cryol administrator credentials.')
   expect((await request.get('/api/v1/agents')).status()).toBe(401)
@@ -9,19 +11,16 @@ test('administrator creates and revokes an unused enrollment token', async ({ pa
   await page.getByLabel('Password').fill(password)
   await page.getByRole('button', { name: 'Sign in' }).click()
   await expect(page.getByRole('heading', { name: 'Endpoint agents' })).toBeVisible()
-  await page.getByRole('button', { name: 'New enrollment' }).click()
-  const enrollment = page.getByRole('dialog', { name: 'Enroll an endpoint' })
-  const platform = enrollment.getByLabel('Endpoint operating system')
-  await platform.selectOption('android')
-  await expect(enrollment.getByText(/unavailable for Android/)).toBeVisible()
-  await expect(enrollment.getByRole('button', { name: 'Generate token' })).toBeDisabled()
+  const enrollment = page.getByRole('region', { name: 'Agent downloads' })
+  await expect(enrollment.getByLabel('Endpoint operating system')).toHaveCount(0)
   if (process.env.CRYOL_E2E_MAC_DOWNLOAD === '1') {
-    await platform.selectOption('macos')
+    await expect(enrollment.getByRole('link', { name: 'Download macOS Apple silicon ZIP' })).toBeVisible()
+    await expect(enrollment.getByRole('link', { name: 'Download Linux ARM64 ZIP' })).toBeVisible()
+    await expect(enrollment.getByRole('link', { name: 'Download Linux x64 ZIP' })).toBeVisible()
     const download = page.waitForEvent('download')
     await enrollment.getByRole('link', { name: 'Download macOS Intel ZIP' }).click()
     expect((await download).suggestedFilename()).toBe('cryol-agent-macos-intel.zip')
   }
-  await platform.selectOption('windows')
   if (process.env.CRYOL_E2E_INSTALLER === '1') {
     const download = page.waitForEvent('download')
     await enrollment.getByRole('link', { name: 'Download Windows x64 installer' }).click()
@@ -37,5 +36,5 @@ test('administrator creates and revokes an unused enrollment token', async ({ pa
   await enrollment.getByRole('button', { name: 'Generate token' }).click()
   await expect(enrollment.getByLabel('Enrollment token')).toBeVisible()
   await enrollment.getByRole('button', { name: 'Revoke unused token' }).click()
-  await expect(enrollment).toBeHidden()
+  await expect(enrollment.getByLabel('Enrollment token')).toBeHidden()
 })

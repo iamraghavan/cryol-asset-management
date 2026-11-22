@@ -4,8 +4,6 @@ import { useState } from 'react'
 import { RecordDrawer } from './components/record-drawer'
 import { useDebounced } from './lib/inventory'
 import type { AssetPage } from './lib/inventory'
-import { detectAgentPlatform } from './lib/agent-platform'
-import type { AgentPlatform } from './lib/agent-platform'
 import { request, RequestError } from './lib/api'
 
 type Agent = {
@@ -26,7 +24,6 @@ const date = (value: string | null) => value ? new Date(value).toLocaleString() 
 
 export function Agents({ permissions }: { permissions: string[] }) {
   const [selected, setSelected] = useState<string | null>(null)
-  const [enrolling, setEnrolling] = useState(false)
   const [page, setPage] = useState(1)
   const list = useQuery({
     queryKey: ['agents', 'list', page],
@@ -37,8 +34,8 @@ export function Agents({ permissions }: { permissions: string[] }) {
   return <>
     <header className="page-heading">
       <div><h1>Endpoint agents</h1><p>Review enrolled devices and their latest reported inventory.</p></div>
-      {permissions.includes('agents.enroll') && <button className="button-primary" onClick={() => setEnrolling(true)}><Plus size={17} /> New enrollment</button>}
     </header>
+    {permissions.includes('agents.enroll') && <AgentDownloads />}
     <section className="table-panel" aria-label="Registered agents">
       <div className="table-toolbar"><button onClick={() => void list.refetch()} disabled={list.isFetching}><RefreshCw size={15} /> Refresh</button></div>
       {list.isPending && <p className="table-state" role="status">Loading agents…</p>}
@@ -59,18 +56,11 @@ export function Agents({ permissions }: { permissions: string[] }) {
         <button disabled={!list.data?.hasNext} onClick={() => setPage(page + 1)}>Next</button>
       </div>}
     </section>
-    {enrolling && <Enroll close={() => setEnrolling(false)} />}
     {agent && <Details item={agent} permissions={permissions} close={() => setSelected(null)} />}
   </>
 }
 
-const platformLabels: Record<AgentPlatform, string> = {
-  windows: 'Windows', linux: 'Linux', macos: 'macOS', android: 'Android', ios: 'iPhone / iPad', other: 'Other / unknown',
-}
-
-function Enroll({ close }: { close: () => void }) {
-  const [detected] = useState(() => detectAgentPlatform(navigator.userAgent, navigator.platform, navigator.maxTouchPoints))
-  const [platform, setPlatform] = useState<AgentPlatform>(detected)
+function AgentDownloads() {
   const [credential, setCredential] = useState<Enrollment>()
   const [copied, setCopied] = useState(false)
   const setup = useQuery({
@@ -84,50 +74,47 @@ function Enroll({ close }: { close: () => void }) {
   })
   const revoke = useMutation({
     mutationFn: () => request('/agents/enrollment-tokens/' + credential?.id + '/revoke', 'POST'),
-    onSuccess: close,
+    onSuccess: () => { setCredential(undefined); setCopied(false) },
   })
-  return <RecordDrawer title="Enroll an endpoint" description="Create a single-use token for a device you manage." onClose={close}>
-    <div className="drawer-body">
-      {setup.isPending && <p role="status">Checking setup downloads…</p>}
-      {setup.isError && <p role="alert">{setup.error.message} <button onClick={() => void setup.refetch()}>Retry</button></p>}
-      {setup.data && <div className="field-grid">
-        <label className="field-wide">Endpoint operating system
-          <select value={platform} onChange={(event) => setPlatform(event.target.value as AgentPlatform)}>
-            {Object.entries(platformLabels).map(([value, label]) => <option key={value} value={value}>
-              {label}{value === detected && value !== 'other' ? ' (this device)' : ''}
-            </option>)}
-          </select>
-        </label>
-      </div>}
-      {setup.data?.origin && <p><strong>Server</strong> {setup.data.origin}</p>}
-      {setup.data?.origin.startsWith('http:') && <div className="confirmation">
+  return <section className="table-panel agent-downloads" aria-labelledby="agent-downloads-title">
+    <h2 id="agent-downloads-title">Agent downloads</h2>
+    {setup.isPending && <p role="status">Checking setup downloads…</p>}
+    {setup.isError && <p role="alert">{setup.error.message} <button onClick={() => void setup.refetch()}>Retry</button></p>}
+    {setup.data && !setup.data.windowsInstaller && setup.data.platforms.length === 0 &&
+      <p>No downloads are configured for this server.</p>}
+    {setup.data && <>
+      {setup.data.origin && <p><strong>Server</strong> {setup.data.origin}</p>}
+      {setup.data.origin.startsWith('http:') && <div className="confirmation">
         <p>This download is for a test agent on this computer.</p>
         <p>For a separate endpoint, open this console using the Cryol server’s LAN HTTPS address before downloading.</p>
       </div>}
-      {setup.data && (platform === 'android' || platform === 'ios' || platform === 'other') &&
-        <p role="status">A Cryol agent is unavailable for {platformLabels[platform] === 'Other / unknown' ? 'this platform' : platformLabels[platform]}. Choose the operating system of another managed endpoint if you are downloading for it.</p>}
-      {setup.data && platform === 'windows' && (setup.data.windowsInstaller ? <section aria-label="Windows setup">
-        <h3>Windows x64</h3>
-        <div className="row-actions">
-          <a className="button button-primary" href="/api/v1/agents/setup/windows-installer"><Download size={16} /> Download Windows x64 installer</a>
-          {setup.data.publicCA && !setup.data.windowsInstallerBundledCA && <a className="button" href="/api/v1/agents/setup/ca"><Download size={16} /> Public CA certificate</a>}
-        </div>
-        {setup.data.windowsInstallerTest && <p role="note"><strong>Unsigned test build.</strong> Use it on a disposable Windows test machine.</p>}
-        {setup.data.windowsInstallerBundledCA
-          ? <p>The installer includes Cryol’s public CA. Setup uses it automatically.</p>
-          : setup.data.publicCA && <p>For this private HTTPS server, select the public CA certificate in the wizard.</p>}
-        <ol>
-          <li>Run <strong>Cryol-Agent-Setup-x64.exe</strong> and approve the Windows administrator prompt.</li>
-          <li>Check the server address and run <strong>Test connection</strong>. Then paste a fresh enrollment token.</li>
-          <li>Check <strong>Last scan</strong> after setup. The Windows service starts automatically at boot.</li>
-        </ol>
-      </section> : setup.data.platforms.includes('windows') ? <section aria-label="Windows setup">
-        <h3>Windows x64</h3>
-        <a className="button" href="/api/v1/agents/setup/windows"><Download size={16} /> Download Windows x64 ZIP</a>
-        <p>Extract the ZIP and open <strong>Start Cryol Agent.cmd</strong>. Approve the administrator prompt and paste a fresh token.</p>
-      </section> : <p>Windows setup is unavailable on this server.</p>)}
-      {setup.data && (platform === 'linux' || platform === 'macos') && <UnixSetup
-        platform={platform} available={setup.data.platforms} />}
+      <div className="agent-download-grid">
+        {setup.data.windowsInstaller ? <section aria-label="Windows setup">
+          <h3>Windows x64</h3>
+          <div className="row-actions">
+            <a className="button button-primary" href="/api/v1/agents/setup/windows-installer"><Download size={16} /> Download Windows x64 installer</a>
+            {setup.data.publicCA && !setup.data.windowsInstallerBundledCA && <a className="button" href="/api/v1/agents/setup/ca"><Download size={16} /> Public CA certificate</a>}
+          </div>
+          {setup.data.windowsInstallerTest && <p role="note"><strong>Unsigned test build.</strong> Use it on a disposable Windows test machine.</p>}
+          {setup.data.windowsInstallerBundledCA
+            ? <p>The installer includes Cryol’s public CA. Setup uses it automatically.</p>
+            : setup.data.publicCA && <p>For this private HTTPS server, select the public CA certificate in the wizard.</p>}
+          <ol>
+            <li>Run <strong>Cryol-Agent-Setup-x64.exe</strong> and approve the Windows administrator prompt.</li>
+            <li>Check the server address and run <strong>Test connection</strong>. Then paste a fresh enrollment token.</li>
+            <li>Check <strong>Last scan</strong> after setup. The Windows service starts automatically at boot.</li>
+          </ol>
+        </section> : setup.data.platforms.includes('windows') ? <section aria-label="Windows setup">
+          <h3>Windows x64</h3>
+          <a className="button" href="/api/v1/agents/setup/windows"><Download size={16} /> Download Windows x64 ZIP</a>
+          <p>Extract the ZIP and open <strong>Start Cryol Agent.cmd</strong>. Approve the administrator prompt and paste a fresh token.</p>
+        </section> : null}
+        <UnixSetup platform="linux" available={setup.data.platforms} />
+        <UnixSetup platform="macos" available={setup.data.platforms} />
+      </div>
+    </>}
+    <div className="agent-enrollment">
+      <h3>Enrollment token</h3>
 
       {credential && <>
         <p>The token expires at {date(credential.expiresAt)}.</p>
@@ -138,14 +125,11 @@ function Enroll({ close }: { close: () => void }) {
         {revoke.isError && <p role="alert">{revoke.error.message}</p>}
       </>}
       {issue.isError && <p role="alert">{issue.error.message}</p>}
-    </div>
-    <footer className="drawer-footer">
-      <button onClick={close}>Close</button>
       {credential
         ? <button className="danger-button" disabled={revoke.isPending} onClick={() => revoke.mutate()}>Revoke unused token</button>
-        : <button className="button-primary" disabled={issue.isPending || ['android', 'ios', 'other'].includes(platform)} onClick={() => issue.mutate()}>Generate token</button>}
-    </footer>
-  </RecordDrawer>
+        : <button className="button-primary" disabled={issue.isPending} onClick={() => issue.mutate()}><Plus size={16} /> Generate token</button>}
+    </div>
+  </section>
 }
 
 function UnixSetup({ platform, available }: { platform: 'linux' | 'macos'; available: string[] }) {
@@ -153,9 +137,10 @@ function UnixSetup({ platform, available }: { platform: 'linux' | 'macos'; avail
     ? [{ id: 'macos-arm64', label: 'macOS Apple silicon' }, { id: 'macos-intel', label: 'macOS Intel' }]
     : [{ id: 'linux', label: 'Linux x64' }, { id: 'linux-arm64', label: 'Linux ARM64' }]
   const choices = packages.filter((item) => available.includes(item.id))
-  if (!choices.length) return <p>{platformLabels[platform]} setup is unavailable on this server.</p>
-  return <section aria-label={platformLabels[platform] + ' setup'}>
-    <h3>{platformLabels[platform]} setup</h3>
+  if (!choices.length) return null
+  const label = platform === 'macos' ? 'macOS' : 'Linux'
+  return <section aria-label={label + ' setup'}>
+    <h3>{label} setup</h3>
     <div className="row-actions">
       {choices.map((item) => <a key={item.id} className="button" href={'/api/v1/agents/setup/' + item.id}><Download size={16} /> Download {item.label} ZIP</a>)}
     </div>
