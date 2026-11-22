@@ -1,0 +1,129 @@
+name: Signed Windows agent setup
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sign:
+    name: Build and verify signed Windows installer
+    if: github.ref == 'refs/heads/main'
+    runs-on: windows-2025
+    environment: windows-code-signing
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      SIGNING_ENDPOINT: ${{ vars.CRYOL_SIGNING_ENDPOINT }}
+      SIGNING_ACCOUNT: ${{ vars.CRYOL_SIGNING_ACCOUNT }}
+      SIGNING_PROFILE: ${{ vars.CRYOL_SIGNING_PROFILE }}
+      AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+    steps:
+      - name: Check signing configuration
+        shell: pwsh
+        run: |
+          $required = @('SIGNING_ENDPOINT', 'SIGNING_ACCOUNT', 'SIGNING_PROFILE', 'AZURE_CLIENT_ID', 'AZURE_TENANT_ID', 'AZURE_SUBSCRIPTION_ID')
+          $missing = @($required | Where-Object { [string]::IsNullOrWhiteSpace([Environment]::GetEnvironmentVariable($_)) })
+          if ($missing.Count) {
+            throw "Configure the windows-code-signing environment before signing. Missing: $($missing -join ', ')"
+          }
+          $endpoint = [uri]$env:SIGNING_ENDPOINT
+          if ($endpoint.Scheme -ne 'https' -or -not $endpoint.Host.EndsWith('.codesigning.azure.net')) {
+            throw 'Use the HTTPS endpoint of your Artifact Signing account.'
+          }
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: apps/server/go.mod
+          cache-dependency-path: apps/server/go.sum
+      - name: Build agent payload
+        shell: pwsh
+        working-directory: apps/server
+        run: |
+          $env:GOOS = 'windows'
+          $env:GOARCH = 'amd64'
+          $env:CGO_ENABLED = '0'
+          $out = Join-Path $env:GITHUB_WORKSPACE 'dist/windows-agent'
+          New-Item -ItemType Directory -Path $out -Force | Out-Null
+          go build -trimpath -o (Join-Path $out 'cryol-agent.exe') ./cmd/cryol-agent
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Set up pinned NSIS bundle
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $nsis = Join-Path $env:RUNNER_TEMP 'cryol-nsis'
+          $zip = Join-Path $nsis 'bundle.tar.gz'
+          New-Item -ItemType Directory -Path $nsis -Force | Out-Null
+          gh release download 'nsis@2.0.4' --repo electron-userland/electron-builder-binaries --pattern nsis-bundle-3.13.tar.gz --output $zip
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          tar -xzf $zip -C $nsis
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $bundle = Join-Path $nsis 'nsis-bundle/windows'
+          "NSISDIR=$bundle" >> $env:GITHUB_ENV
+          "CRYOL_MAKENSIS=$(Join-Path $bundle 'makensis.exe')" >> $env:GITHUB_ENV
+      - name: Authenticate to Artifact Signing
+        uses: azure/login@v3
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Sign agent payload
+        uses: azure/artifact-signing-action@v2
+        with:
+          endpoint: ${{ vars.CRYOL_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.CRYOL_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.CRYOL_SIGNING_PROFILE }}
+          files: ${{ github.workspace }}\dist\windows-agent\cryol-agent.exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+      - name: Package signed agent
+        shell: pwsh
+        working-directory: installer/windows/agent
+        run: |
+          $out = Join-Path $env:GITHUB_WORKSPACE 'dist/windows-agent'
+          $agent = Join-Path $out 'cryol-agent.exe'
+          $setup = Join-Path $out 'Cryol-Agent-Setup-x64.exe'
+          if ((Get-AuthenticodeSignature -LiteralPath $agent).Status -ne 'Valid') {
+            throw 'The agent payload signature is not trusted on the build host.'
+          }
+          & $env:CRYOL_MAKENSIS /V3 "/DAGENT_EXE=$agent" "/DOUTPUT_EXE=$setup" setup.nsi
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Sign installer
+        uses: azure/artifact-signing-action@v2
+        with:
+          endpoint: ${{ vars.CRYOL_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.CRYOL_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.CRYOL_SIGNING_PROFILE }}
+          files: ${{ github.workspace }}\dist\windows-agent\Cryol-Agent-Setup-x64.exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+      - name: Verify publisher signatures and write checksums
+        shell: pwsh
+        working-directory: dist/windows-agent
+        run: |
+          $files = @('Cryol-Agent-Setup-x64.exe', 'cryol-agent.exe')
+          $checksums = foreach ($file in $files) {
+            $signature = Get-AuthenticodeSignature -LiteralPath $file
+            if ($signature.Status -ne 'Valid' -or -not $signature.TimeStamperCertificate) {
+              throw "Missing trusted timestamped Authenticode signature: $file"
+            }
+            Write-Host "$file publisher: $($signature.SignerCertificate.Subject)"
+            "$((Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash.ToLowerInvariant())  $file"
+          }
+          $checksums | Set-Content -LiteralPath SHA256SUMS.txt -Encoding ascii
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cryol-windows-agent-signed-x64
+          path: |
+            dist/windows-agent/Cryol-Agent-Setup-x64.exe
+            dist/windows-agent/cryol-agent.exe
+            dist/windows-agent/SHA256SUMS.txt
+          if-no-files-found: error

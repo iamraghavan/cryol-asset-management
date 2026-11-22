@@ -21,3 +21,16 @@ Test enrollment, first inventory, service reboot, UI cancellation, denied UAC, i
 Run the new setup wizard on Windows and select **Repair existing Cryol service**. This option restores the Cryol display name, plain-text description, Automatic startup and bounded restart settings, then verifies the service is running. It reuses existing enrollment and requires no new token. It checks the service path and account first. A missing executable or enrollment file stops repair. Review the endpoint protection report if the binary is missing.
 
 Installer file details and Windows Apps & Features use the developer label **Raghavan - Cryol**. UAC verified publisher still depends on a trusted Authenticode signature issued to the signing identity.
+
+## Signed build on GitHub Actions
+
+The **Signed Windows agent setup** workflow is manual and restricted to `main`. It signs the payload before NSIS packages it, signs the resulting setup EXE, verifies trusted Authenticode signatures and timestamps on Windows, and then uploads `cryol-windows-agent-signed-x64`. Regular push builds remain unsigned test artifacts. The signing service is a build-time dependency only.
+
+1. Create an Azure Artifact Signing account, complete identity validation, and create a **Public Trust** profile for distribution to ordinary Windows PCs. Windows shows the certificate's validated publisher identity. The `Raghavan - Cryol` display label in the wizard is separate.
+2. Create a GitHub environment named `windows-code-signing`. Limit it to the release branch and add reviewers if available. In Azure, configure a federated workload identity for `repo:iamraghavan/cryol-asset-management:environment:windows-code-signing` and grant the **Artifact Signing Certificate Profile Signer** role at the appropriate scope. This workflow uses OIDC and does not store a signing key in GitHub.
+3. Add environment variables `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`, `CRYOL_SIGNING_ENDPOINT`, `CRYOL_SIGNING_ACCOUNT`, and `CRYOL_SIGNING_PROFILE` to that GitHub environment.
+4. Run the workflow from **Actions → Signed Windows agent setup**. After signing and testing the installer on a Windows endpoint with protection enabled, configure the console to distribute the approved signed installer.
+
+For managed internal PCs, an organization can instead use its own approved enterprise code-signing certificate and distribute trust using its endpoint management policy. Sign the agent and installer in the same order on an authorized Windows signing workstation. The Cryol LAN HTTPS CA is for server authentication and is separate from Windows code signing. The NSIS-generated uninstaller is not covered by the installer signature.
+
+[Microsoft Artifact Signing quickstart](https://learn.microsoft.com/en-us/azure/artifact-signing/quickstart) · [GitHub signing integration](https://learn.microsoft.com/en-us/azure/artifact-signing/how-to-signing-integrations) · [Microsoft signing action](https://github.com/Azure/artifact-signing-action)
