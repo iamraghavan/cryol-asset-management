@@ -67,7 +67,7 @@ function Enroll({ close }: { close: () => void }) {
   const [copied, setCopied] = useState(false)
   const setup = useQuery({
     queryKey: ['agents', 'setup'],
-    queryFn: ({ signal }) => request<{ origin: string; platforms: string[]; windowsInstaller: boolean; publicCA: boolean }>('/agents/setup', 'GET', undefined, signal),
+    queryFn: ({ signal }) => request<{ origin: string; platforms: string[]; windowsInstaller: boolean; windowsInstallerTest: boolean; publicCA: boolean }>('/agents/setup', 'GET', undefined, signal),
     retry: false,
   })
   const issue = useMutation({
@@ -88,23 +88,28 @@ function Enroll({ close }: { close: () => void }) {
           <p>This download is for a test agent on this computer.</p>
           <p>For a separate endpoint, open this console using the Cryol server’s LAN HTTPS address before downloading.</p>
         </div>}
-        {setup.data.windowsInstaller && <>
+        {setup.data.windowsInstaller ? <section aria-label="Windows setup">
+          <h3>Windows x64</h3>
           <div className="row-actions">
-            <a className="button button-primary" href="/api/v1/agents/setup/windows-installer"><Download size={16} /> Windows Setup</a>
+            <a className="button button-primary" href="/api/v1/agents/setup/windows-installer"><Download size={16} /> Download Windows x64 installer</a>
             {setup.data.publicCA && <a className="button" href="/api/v1/agents/setup/ca"><Download size={16} /> Public CA certificate</a>}
           </div>
-          <p>Open Windows Setup, enter the server address shown above and paste a one-use token. If your endpoint uses a private CA, select its public certificate in the wizard. Check <strong>Last scan</strong> after setup.</p>
-        </>}
-        {setup.data.platforms.length > 0 && <ol>
-          <li>Download and extract the matching setup bundle.
-            <div className="row-actions">
-              {setup.data.platforms.includes('windows') && <a className="button" href="/api/v1/agents/setup/windows"><Download size={16} /> Windows x64</a>}
-              {setup.data.platforms.includes('linux') && <a className="button" href="/api/v1/agents/setup/linux"><Download size={16} /> Linux x64</a>}
-            </div>
-          </li>
-          <li>Generate a token. On Windows, double-click <strong>Start Cryol Agent.cmd</strong> and approve the administrator prompt. On Linux, run <code>sh start-cryol-agent.sh</code> in the extracted folder.</li>
-          <li>Paste the token when prompted and press Enter. On Windows it appears as you type. Then check <strong>Last scan</strong> in Cryol. The Windows agent runs in the background and starts at boot. On Linux, keep the terminal open.</li>
-        </ol>}
+          {setup.data.windowsInstallerTest && <p role="note"><strong>Unsigned test build.</strong> Use it on a disposable Windows test machine.</p>}
+          <ol>
+            <li>Run <strong>Cryol-Agent-Setup-x64.exe</strong> and approve the Windows administrator prompt.</li>
+            <li>Enter the server address above and paste a fresh enrollment token. If your server uses a private CA, select the public certificate in the wizard.</li>
+            <li>Check <strong>Last scan</strong> after setup. The Windows service starts automatically at boot.</li>
+          </ol>
+        </section> : setup.data.platforms.includes('windows') && <section aria-label="Windows setup">
+          <h3>Windows x64</h3>
+          <a className="button" href="/api/v1/agents/setup/windows"><Download size={16} /> Download Windows x64 ZIP</a>
+          <p>Extract the ZIP and open <strong>Start Cryol Agent.cmd</strong>. Approve the administrator prompt and paste a fresh token.</p>
+        </section>}
+        {setup.data.platforms.includes('linux') && <section aria-label="Linux setup">
+          <h3>Linux x64</h3>
+          <a className="button" href="/api/v1/agents/setup/linux"><Download size={16} /> Download Linux x64 ZIP</a>
+          <p>Extract the ZIP, run <code>sh start-cryol-agent.sh</code>, and paste a fresh token. Keep the terminal open for updates.</p>
+        </section>}
       </> : setup.data && <p>Setup downloads are unavailable at this address. Use your HTTPS console address or the configured local test console.</p>}
       {credential && <>
         <p>The token expires at {date(credential.expiresAt)}.</p>

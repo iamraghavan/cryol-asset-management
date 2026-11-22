@@ -11,9 +11,15 @@ test('administrator creates and revokes an unused enrollment token', async ({ pa
   await expect(page.getByRole('heading', { name: 'Endpoint agents' })).toBeVisible()
   await page.getByRole('button', { name: 'New enrollment' }).click()
   const enrollment = page.getByRole('dialog', { name: 'Enroll an endpoint' })
-  if (process.env.CRYOL_E2E_SETUP === '1') {
+  if (process.env.CRYOL_E2E_INSTALLER === '1') {
     const download = page.waitForEvent('download')
-    await enrollment.getByRole('link', { name: 'Windows x64' }).click()
+    await enrollment.getByRole('link', { name: 'Download Windows x64 installer' }).click()
+    expect((await download).suggestedFilename()).toBe('Cryol-Agent-Setup-x64.exe')
+    await expect(enrollment.getByRole('link', { name: 'Download Windows x64 ZIP' })).toHaveCount(0)
+    await expect(enrollment.getByText('Unsigned test build.')).toBeVisible()
+  } else if (process.env.CRYOL_E2E_SETUP === '1') {
+    const download = page.waitForEvent('download')
+    await enrollment.getByRole('link', { name: 'Download Windows x64 ZIP' }).click()
     expect((await download).suggestedFilename()).toBe('cryol-agent-windows-service-x64.zip')
     await expect(enrollment.getByText('This download is for a test agent on this computer.')).toBeVisible()
   }
