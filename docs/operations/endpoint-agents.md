@@ -1,6 +1,6 @@
 # Endpoint discovery
 
-The initial endpoint workflow collects inventory from authorized Windows and Linux computers. Agent connections require direct HTTPS to the Cryol server. Configure `CRYOL_TLS_CERT` and `CRYOL_TLS_KEY` with a certificate matching the server name. Give the agent the internal CA PEM through `-ca` when the system trust store does not already include it. Enrollment uses an outbound HTTPS connection and a one-use token valid for 15 minutes.
+The endpoint workflow collects inventory from authorized Windows, Linux and macOS computers. Agent connections require direct HTTPS to the Cryol server. Configure `CRYOL_TLS_CERT` and `CRYOL_TLS_KEY` with a certificate matching the server name. Give the agent the internal CA PEM through `-ca` when the system trust store does not already include it. Enrollment uses an outbound HTTPS connection and a one-use token valid for 15 minutes.
 
 ## Operation
 
@@ -29,7 +29,7 @@ Set `CRYOL_AGENT_DOWNLOAD_DIR` on the Cryol server to an admin-managed directory
 
 For an internal CA, install trust in the Windows Local Computer certificate store for service use or put the public CA certificate in the extracted ZIP folder as `cryol-ca.pem`. Use the DNS name or IP address that matches the Cryol server certificate. Open the console using the address the endpoint can reach before downloading its bundle. Changing the origin generates a separate Linux launcher state directory. The Windows installer registers one service per machine. Reconfiguring an installed Windows service for a different server requires deliberate operator action.
 
-For same-computer development, use a loopback listener and set `CRYOL_AGENT_LOCAL_HTTP=1` on the server. Download the bundle from the localhost console and run it on the same Linux or Windows computer. For a Windows or Linux endpoint connecting to a Cryol server on a different computer, including a macOS development server, use HTTPS on a reachable LAN address.
+For same-computer development, use a loopback listener and set `CRYOL_AGENT_LOCAL_HTTP=1` on the server. Download the bundle from the localhost console and run it on the same supported Windows, Linux or macOS computer. For an endpoint connecting to a Cryol server on a different computer, including a macOS development server, use HTTPS on a reachable LAN address.
 
 ## Windows service operations
 
@@ -48,3 +48,19 @@ Bind Cryol to a reachable LAN IP and set `CRYOL_TLS_CERT` and `CRYOL_TLS_KEY`. T
 The Windows setup launcher displays the token as you type or paste it. Press Enter to submit it. Direct CLI enrollment hides the input unless launched with `-show-token`. The setup ZIP contains no enrollment token.
 
 For a console opened locally on the server, set `CRYOL_AGENT_SETUP_ORIGIN=https://HOST:PORT` to generate bundles using the endpoint-facing address. Set `CRYOL_AGENT_SETUP_CA` to the public CA PEM to include that certificate automatically. The bundle accepts only public CA certificates. A server TLS private key is never a valid setup CA file.
+
+## Choose a package for the target device
+
+Under **Endpoint agents → New enrollment**, Cryol suggests the browser's operating system. You can change it when preparing a download for another computer. Choose the CPU architecture for Linux and macOS explicitly. A browser's operating-system label does not identify the hardware architecture reliably.
+
+| Console option | Binary filename in `CRYOL_AGENT_DOWNLOAD_DIR` |
+| --- | --- |
+| Windows x64 ZIP | `cryol-agent.exe` |
+| Linux x64 | `cryol-agent` |
+| Linux ARM64 | `cryol-agent-linux-arm64` |
+| macOS Intel | `cryol-agent-macos-intel` |
+| macOS Apple silicon | `cryol-agent-macos-arm64` |
+
+From `apps/server`, build the macOS binaries with `GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 go build -o cryol-agent-macos-intel ./cmd/cryol-agent` and `GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build -o cryol-agent-macos-arm64 ./cmd/cryol-agent`. For Linux ARM64, use `GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o cryol-agent-linux-arm64 ./cmd/cryol-agent`.
+
+Linux and macOS ZIPs include the launcher, the server address and the public CA when configured. Extract the archive and run `sh start-cryol-agent.sh`. Both run in the foreground. The macOS test agent reports model, CPU, physical memory, OS version and network adapters. Installed application inventory, macOS notarization and boot-time service setup remain open. Android and iOS need dedicated mobile agents and are currently unavailable.

@@ -4,6 +4,8 @@ import { useState } from 'react'
 import { RecordDrawer } from './components/record-drawer'
 import { useDebounced } from './lib/inventory'
 import type { AssetPage } from './lib/inventory'
+import { detectAgentPlatform } from './lib/agent-platform'
+import type { AgentPlatform } from './lib/agent-platform'
 import { request, RequestError } from './lib/api'
 
 type Agent = {
@@ -62,7 +64,13 @@ export function Agents({ permissions }: { permissions: string[] }) {
   </>
 }
 
+const platformLabels: Record<AgentPlatform, string> = {
+  windows: 'Windows', linux: 'Linux', macos: 'macOS', android: 'Android', ios: 'iPhone / iPad', other: 'Other / unknown',
+}
+
 function Enroll({ close }: { close: () => void }) {
+  const [detected] = useState(() => detectAgentPlatform(navigator.userAgent, navigator.platform, navigator.maxTouchPoints))
+  const [platform, setPlatform] = useState<AgentPlatform>(detected)
   const [credential, setCredential] = useState<Enrollment>()
   const [copied, setCopied] = useState(false)
   const setup = useQuery({
@@ -82,38 +90,45 @@ function Enroll({ close }: { close: () => void }) {
     <div className="drawer-body">
       {setup.isPending && <p role="status">Checking setup downloads…</p>}
       {setup.isError && <p role="alert">{setup.error.message} <button onClick={() => void setup.refetch()}>Retry</button></p>}
-      {setup.data && (setup.data.platforms.length > 0 || setup.data.windowsInstaller) ? <>
-        <p><strong>Server</strong> {setup.data.origin}</p>
-        {setup.data.origin.startsWith('http:') && <div className="confirmation">
-          <p>This download is for a test agent on this computer.</p>
-          <p>For a separate endpoint, open this console using the Cryol server’s LAN HTTPS address before downloading.</p>
-        </div>}
-        {setup.data.windowsInstaller ? <section aria-label="Windows setup">
-          <h3>Windows x64</h3>
-          <div className="row-actions">
-            <a className="button button-primary" href="/api/v1/agents/setup/windows-installer"><Download size={16} /> Download Windows x64 installer</a>
-            {setup.data.publicCA && !setup.data.windowsInstallerBundledCA && <a className="button" href="/api/v1/agents/setup/ca"><Download size={16} /> Public CA certificate</a>}
-          </div>
-          {setup.data.windowsInstallerTest && <p role="note"><strong>Unsigned test build.</strong> Use it on a disposable Windows test machine.</p>}
-          {setup.data.windowsInstallerBundledCA
-            ? <p>The installer includes Cryol’s public CA. Setup uses it automatically.</p>
-            : setup.data.publicCA && <p>For this private HTTPS server, select the public CA certificate in the wizard.</p>}
-          <ol>
-            <li>Run <strong>Cryol-Agent-Setup-x64.exe</strong> and approve the Windows administrator prompt.</li>
-            <li>Check the server address and run <strong>Test connection</strong>. Then paste a fresh enrollment token.</li>
-            <li>Check <strong>Last scan</strong> after setup. The Windows service starts automatically at boot.</li>
-          </ol>
-        </section> : setup.data.platforms.includes('windows') && <section aria-label="Windows setup">
-          <h3>Windows x64</h3>
-          <a className="button" href="/api/v1/agents/setup/windows"><Download size={16} /> Download Windows x64 ZIP</a>
-          <p>Extract the ZIP and open <strong>Start Cryol Agent.cmd</strong>. Approve the administrator prompt and paste a fresh token.</p>
-        </section>}
-        {setup.data.platforms.includes('linux') && <section aria-label="Linux setup">
-          <h3>Linux x64</h3>
-          <a className="button" href="/api/v1/agents/setup/linux"><Download size={16} /> Download Linux x64 ZIP</a>
-          <p>Extract the ZIP, run <code>sh start-cryol-agent.sh</code>, and paste a fresh token. Keep the terminal open for updates.</p>
-        </section>}
-      </> : setup.data && <p>Setup downloads are unavailable at this address. Use your HTTPS console address or the configured local test console.</p>}
+      {setup.data && <div className="field-grid">
+        <label className="field-wide">Endpoint operating system
+          <select value={platform} onChange={(event) => setPlatform(event.target.value as AgentPlatform)}>
+            {Object.entries(platformLabels).map(([value, label]) => <option key={value} value={value}>
+              {label}{value === detected && value !== 'other' ? ' (this device)' : ''}
+            </option>)}
+          </select>
+        </label>
+      </div>}
+      {setup.data?.origin && <p><strong>Server</strong> {setup.data.origin}</p>}
+      {setup.data?.origin.startsWith('http:') && <div className="confirmation">
+        <p>This download is for a test agent on this computer.</p>
+        <p>For a separate endpoint, open this console using the Cryol server’s LAN HTTPS address before downloading.</p>
+      </div>}
+      {setup.data && (platform === 'android' || platform === 'ios' || platform === 'other') &&
+        <p role="status">A Cryol agent is unavailable for {platformLabels[platform] === 'Other / unknown' ? 'this platform' : platformLabels[platform]}. Choose the operating system of another managed endpoint if you are downloading for it.</p>}
+      {setup.data && platform === 'windows' && (setup.data.windowsInstaller ? <section aria-label="Windows setup">
+        <h3>Windows x64</h3>
+        <div className="row-actions">
+          <a className="button button-primary" href="/api/v1/agents/setup/windows-installer"><Download size={16} /> Download Windows x64 installer</a>
+          {setup.data.publicCA && !setup.data.windowsInstallerBundledCA && <a className="button" href="/api/v1/agents/setup/ca"><Download size={16} /> Public CA certificate</a>}
+        </div>
+        {setup.data.windowsInstallerTest && <p role="note"><strong>Unsigned test build.</strong> Use it on a disposable Windows test machine.</p>}
+        {setup.data.windowsInstallerBundledCA
+          ? <p>The installer includes Cryol’s public CA. Setup uses it automatically.</p>
+          : setup.data.publicCA && <p>For this private HTTPS server, select the public CA certificate in the wizard.</p>}
+        <ol>
+          <li>Run <strong>Cryol-Agent-Setup-x64.exe</strong> and approve the Windows administrator prompt.</li>
+          <li>Check the server address and run <strong>Test connection</strong>. Then paste a fresh enrollment token.</li>
+          <li>Check <strong>Last scan</strong> after setup. The Windows service starts automatically at boot.</li>
+        </ol>
+      </section> : setup.data.platforms.includes('windows') ? <section aria-label="Windows setup">
+        <h3>Windows x64</h3>
+        <a className="button" href="/api/v1/agents/setup/windows"><Download size={16} /> Download Windows x64 ZIP</a>
+        <p>Extract the ZIP and open <strong>Start Cryol Agent.cmd</strong>. Approve the administrator prompt and paste a fresh token.</p>
+      </section> : <p>Windows setup is unavailable on this server.</p>)}
+      {setup.data && (platform === 'linux' || platform === 'macos') && <UnixSetup
+        platform={platform} available={setup.data.platforms} />}
+
       {credential && <>
         <p>The token expires at {date(credential.expiresAt)}.</p>
         <label>Enrollment token<input readOnly value={credential.token} spellCheck={false} onFocus={(event) => event.target.select()} /></label>
@@ -128,9 +143,25 @@ function Enroll({ close }: { close: () => void }) {
       <button onClick={close}>Close</button>
       {credential
         ? <button className="danger-button" disabled={revoke.isPending} onClick={() => revoke.mutate()}>Revoke unused token</button>
-        : <button className="button-primary" disabled={issue.isPending} onClick={() => issue.mutate()}>Generate token</button>}
+        : <button className="button-primary" disabled={issue.isPending || ['android', 'ios', 'other'].includes(platform)} onClick={() => issue.mutate()}>Generate token</button>}
     </footer>
   </RecordDrawer>
+}
+
+function UnixSetup({ platform, available }: { platform: 'linux' | 'macos'; available: string[] }) {
+  const packages = platform === 'macos'
+    ? [{ id: 'macos-arm64', label: 'macOS Apple silicon' }, { id: 'macos-intel', label: 'macOS Intel' }]
+    : [{ id: 'linux', label: 'Linux x64' }, { id: 'linux-arm64', label: 'Linux ARM64' }]
+  const choices = packages.filter((item) => available.includes(item.id))
+  if (!choices.length) return <p>{platformLabels[platform]} setup is unavailable on this server.</p>
+  return <section aria-label={platformLabels[platform] + ' setup'}>
+    <h3>{platformLabels[platform]} setup</h3>
+    <div className="row-actions">
+      {choices.map((item) => <a key={item.id} className="button" href={'/api/v1/agents/setup/' + item.id}><Download size={16} /> Download {item.label} ZIP</a>)}
+    </div>
+    <p>Extract the ZIP, run <code>sh start-cryol-agent.sh</code>, and paste a fresh token. Keep the terminal open for updates.</p>
+    {platform === 'macos' && <p>The macOS agent currently reports hardware, operating system and network inventory.</p>}
+  </section>
 }
 
 function Details({ item, permissions, close }: { item: Agent; permissions: string[]; close: () => void }) {

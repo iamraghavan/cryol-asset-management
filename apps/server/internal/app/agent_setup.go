@@ -70,6 +70,12 @@ func setupBinary(platform string) string {
 		return "cryol-agent.exe"
 	case "linux":
 		return "cryol-agent"
+	case "linux-arm64":
+		return "cryol-agent-linux-arm64"
+	case "macos-intel":
+		return "cryol-agent-macos-intel"
+	case "macos-arm64":
+		return "cryol-agent-macos-arm64"
 	default:
 		return ""
 	}
@@ -98,7 +104,7 @@ func setupOptions(w http.ResponseWriter, r *http.Request) {
 	installerAvailable, caAvailable := false, false
 	if ca, err := setupCA(); ok && err == nil {
 		caAvailable = len(ca) > 0
-		for _, platform := range []string{"windows", "linux"} {
+		for _, platform := range []string{"windows", "linux", "linux-arm64", "macos-arm64", "macos-intel"} {
 			if file, err := openSetupBinary(platform); err == nil {
 				file.Close()
 				platforms = append(platforms, platform)
@@ -203,9 +209,12 @@ func serveSetup(w http.ResponseWriter, r *http.Request) {
 	defer file.Close()
 
 	w.Header().Set("Content-Type", "application/zip")
-	filename := "cryol-agent-linux-x64.zip"
-	if platform == "windows" {
+	filename := "cryol-agent-" + platform + ".zip"
+	switch platform {
+	case "windows":
 		filename = "cryol-agent-windows-service-x64.zip"
+	case "linux":
+		filename = "cryol-agent-linux-x64.zip"
 	}
 	w.Header().Set("Content-Disposition", `attachment; filename="`+filename+`"`)
 	w.Header().Set("Cache-Control", "no-store")
@@ -219,7 +228,11 @@ func serveSetup(w http.ResponseWriter, r *http.Request) {
 	if _, err = io.WriteString(entry, script); err != nil {
 		return
 	}
-	entry, err = archive.Create(setupBinary(platform))
+	binaryName := "cryol-agent"
+	if platform == "windows" {
+		binaryName = "cryol-agent.exe"
+	}
+	entry, err = archive.Create(binaryName)
 	if err != nil {
 		return
 	}

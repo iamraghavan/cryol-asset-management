@@ -429,8 +429,8 @@ func atomicWrite(path string, data []byte) error {
 }
 
 func collect(ctx context.Context) (inventory.Snapshot, error) {
-	if runtime.GOOS != "windows" && runtime.GOOS != "linux" {
-		return inventory.Snapshot{}, errors.New("inventory collection is supported on Windows and Linux")
+	if runtime.GOOS != "windows" && runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		return inventory.Snapshot{}, errors.New("inventory collection is supported on Windows, Linux and macOS")
 	}
 	hostname, err := os.Hostname()
 	if err != nil {

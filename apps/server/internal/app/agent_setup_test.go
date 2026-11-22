@@ -116,3 +116,43 @@ func TestWindowsInstallerDownload(t *testing.T) {
 		t.Fatalf("incorrect installer response: %d %v", w.Code, w.Header())
 	}
 }
+
+func TestDesktopBundleBinaryNames(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("CRYOL_AGENT_DOWNLOAD_DIR", dir)
+	t.Setenv("CRYOL_AGENT_SETUP_ORIGIN", "https://test.cryol.internal:8443")
+	router := chi.NewRouter()
+	router.Get("/setup/{platform}", serveSetup)
+
+	for _, platform := range []string{"linux", "linux-arm64", "macos-arm64", "macos-intel", "android"} {
+		t.Run(platform, func(t *testing.T) {
+			filename := setupBinary(platform)
+			if platform != "android" {
+				if filename == "" {
+					t.Fatal("missing build filename")
+				}
+				if err := os.WriteFile(filepath.Join(dir, filename), []byte(platform), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			w := httptest.NewRecorder()
+			router.ServeHTTP(w, httptest.NewRequest("GET", "/setup/"+platform, nil))
+			if platform == "android" {
+				if w.Code != 404 {
+					t.Fatalf("unsupported agent returned %d", w.Code)
+				}
+				return
+			}
+			if w.Code != 200 {
+				t.Fatalf("download returned %d: %s", w.Code, w.Body)
+			}
+			bundle, err := zip.NewReader(bytes.NewReader(w.Body.Bytes()), int64(w.Body.Len()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(bundle.File) != 2 || bundle.File[0].Name != "start-cryol-agent.sh" || bundle.File[1].Name != "cryol-agent" {
+				t.Fatal("bundle does not match the launcher's expected paths")
+			}
+		})
+	}
+}

@@ -11,6 +11,17 @@ test('administrator creates and revokes an unused enrollment token', async ({ pa
   await expect(page.getByRole('heading', { name: 'Endpoint agents' })).toBeVisible()
   await page.getByRole('button', { name: 'New enrollment' }).click()
   const enrollment = page.getByRole('dialog', { name: 'Enroll an endpoint' })
+  const platform = enrollment.getByLabel('Endpoint operating system')
+  await platform.selectOption('android')
+  await expect(enrollment.getByText(/unavailable for Android/)).toBeVisible()
+  await expect(enrollment.getByRole('button', { name: 'Generate token' })).toBeDisabled()
+  if (process.env.CRYOL_E2E_MAC_DOWNLOAD === '1') {
+    await platform.selectOption('macos')
+    const download = page.waitForEvent('download')
+    await enrollment.getByRole('link', { name: 'Download macOS Intel ZIP' }).click()
+    expect((await download).suggestedFilename()).toBe('cryol-agent-macos-intel.zip')
+  }
+  await platform.selectOption('windows')
   if (process.env.CRYOL_E2E_INSTALLER === '1') {
     const download = page.waitForEvent('download')
     await enrollment.getByRole('link', { name: 'Download Windows x64 installer' }).click()

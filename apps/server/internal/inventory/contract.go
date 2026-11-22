@@ -72,7 +72,7 @@ func textOK(s string, max int) bool {
 
 func (s Snapshot) Validate(now time.Time) error {
 	if s.Version != 1 || s.ScannedAt.IsZero() || s.ScannedAt.After(now.Add(10*time.Minute)) || s.ScannedAt.Before(now.Add(-30*24*time.Hour)) ||
-		(s.OSFamily != "windows" && s.OSFamily != "linux") || s.Hostname == "" || s.AgentVersion == "" ||
+		(s.OSFamily != "windows" && s.OSFamily != "linux" && s.OSFamily != "darwin") || s.Hostname == "" || s.AgentVersion == "" ||
 		s.LogicalCPUs < 1 || s.LogicalCPUs > 65536 ||
 		(s.SoftwareStatus != "complete" && s.SoftwareStatus != "unavailable") || len(s.Network) > 256 || len(s.Software) > 20000 {
 		return errors.New("unsupported or out-of-bounds inventory")
