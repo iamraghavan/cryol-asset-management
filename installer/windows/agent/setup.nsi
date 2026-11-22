@@ -15,10 +15,10 @@ SetCompressor /SOLID lzma
   !define OUTPUT_EXE "Cryol-Agent-Setup-x64.exe"
 !endif
 !ifndef PRODUCT_VERSION
-  !define PRODUCT_VERSION "0.3.0"
+  !define PRODUCT_VERSION "0.3.1"
 !endif
 !ifndef FILE_VERSION
-  !define FILE_VERSION "0.3.0.0"
+  !define FILE_VERSION "0.3.1.0"
 !endif
 !ifndef DEFAULT_SERVER
   !define DEFAULT_SERVER ""
@@ -59,6 +59,9 @@ Page custom EnrollmentPage EnrollmentLeave
 Var Server
 Var Mode
 Var HasService
+Var HasPreviousFiles
+Var ArchivePrevious
+Var ArchiveControl
 Var InstallRadio
 Var RepairRadio
 Var Token
@@ -88,6 +91,14 @@ Function .onInit
     StrCpy $HasService "1"
     StrCpy $Mode "repair"
   ${EndIf}
+  StrCpy $HasPreviousFiles "0"
+  StrCpy $ArchivePrevious "0"
+  StrCpy $3 "$PROGRAMFILES64\Cryol Agent"
+  System::Call 'Kernel32::GetFileAttributesW(w r3) i.r0'
+  ${If} $HasService == "0"
+  ${AndIf} $0 != -1
+    StrCpy $HasPreviousFiles "1"
+  ${EndIf}
   ClearErrors
 FunctionEnd
 
@@ -108,6 +119,15 @@ Function OperationPage
   Pop $0
   ${If} $HasService == "0"
     EnableWindow $RepairRadio 0
+    ${If} $HasPreviousFiles == "1"
+      ${NSD_CreateCheckbox} 0 108u 100% 14u "Archive previous local files and enroll"
+      Pop $ArchiveControl
+      ${If} $ArchivePrevious == "1"
+        ${NSD_Check} $ArchiveControl
+      ${EndIf}
+      ${NSD_CreateLabel} 12u 124u 95% 13u "The existing folder will be moved to a protected backup."
+      Pop $0
+    ${EndIf}
   ${Else}
     EnableWindow $InstallRadio 0
     ${NSD_CreateButton} 12u 108u 55% 15u "Check service status"
@@ -142,6 +162,14 @@ Function OperationLeave
     StrCpy $Token ""
   ${Else}
     StrCpy $Mode "install"
+    ${If} $HasPreviousFiles == "1"
+      ${NSD_GetState} $ArchiveControl $0
+      ${If} $0 != ${BST_CHECKED}
+        MessageBox MB_ICONEXCLAMATION "Cryol found files from a previous installation. Select the archive option to preserve them and continue."
+        Abort
+      ${EndIf}
+      StrCpy $ArchivePrevious "1"
+    ${EndIf}
   ${EndIf}
 FunctionEnd
 
@@ -301,7 +329,11 @@ Section "Install Cryol Endpoint Inventory"
     Goto failed
   ${EndIf}
   DetailPrint "Connecting and installing the Cryol service..."
-  nsExec::ExecToStack /TIMEOUT=90000 '"$PLUGINSDIR\cryol-agent.exe" install-service -installer-input'
+  ${If} $ArchivePrevious == "1"
+    nsExec::ExecToStack /TIMEOUT=90000 '"$PLUGINSDIR\cryol-agent.exe" install-service -installer-input -archive-existing'
+  ${Else}
+    nsExec::ExecToStack /TIMEOUT=90000 '"$PLUGINSDIR\cryol-agent.exe" install-service -installer-input'
+  ${EndIf}
   Pop $1
   Pop $2
   Call ClearSetupEnvironment

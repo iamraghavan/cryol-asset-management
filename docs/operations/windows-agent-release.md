@@ -50,3 +50,9 @@ A site-specific installer can include the HTTPS server address and public CA:
 The one-use enrollment token remains separate from reusable downloads. The connection test and service status check do not consume a token.
 
 When serving a verified site-specific installer with an embedded CA, set `CRYOL_WINDOWS_AGENT_INSTALLER_BUNDLED_CA=1`. This tells the console to omit the separate CA download for Windows Setup. It does not add a certificate to an existing EXE.
+
+## Reinstall when the Cryol folder already exists
+
+If the Cryol service is still registered, choose **Repair existing Cryol service**. If Windows has removed the service but its Program Files directory remains, setup 0.3.1 shows **Archive previous local files and enroll**. Select it and use a fresh enrollment token. Setup moves the old directory to a timestamped sibling and preserves its data and permissions. It refuses to archive files or redirected directories and does not delete the backup. If setup fails after the move, it reports where the previous files are preserved. The backup can contain the old device credential. Keep it protected.
+
+After the new endpoint reports a scan, revoke its old registration if it will no longer be used. If endpoint protection quarantined an executable, review the detection before installing a new test build.

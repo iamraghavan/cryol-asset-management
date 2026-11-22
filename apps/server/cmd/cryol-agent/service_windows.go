@@ -13,7 +13,9 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/cryol/cryol-asset-management/apps/server/internal/inventory"
 	"golang.org/x/sys/windows"
+	"golang.org/x/sys/windows/registry"
 	"golang.org/x/sys/windows/svc"
 	"golang.org/x/sys/windows/svc/eventlog"
 	"golang.org/x/sys/windows/svc/mgr"
@@ -111,6 +113,7 @@ func installService(ctx context.Context, log *slog.Logger, args []string) (resul
 	local := fs.Bool("local-http", false, "allow an explicit same-computer development connection")
 	showToken := fs.Bool("show-token", false, "show enrollment input while typing or pasting")
 	installerInput := fs.Bool("installer-input", false, "accept the enrollment token from the elevated setup process")
+	archiveExisting := fs.Bool("archive-existing", false, "archive a leftover local Cryol directory before a fresh enrollment")
 	pause := fs.Bool("pause", false, "keep the elevated setup window open after installation")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -172,6 +175,11 @@ func installService(ctx context.Context, log *slog.Logger, args []string) (resul
 	if err != nil {
 		return err
 	}
+	unlock, err := lockAgent(filepath.Join(programs, "Cryol Agent Setup.lock"))
+	if err != nil {
+		return fmt.Errorf("another Cryol setup may be active: %w", err)
+	}
+	defer unlock()
 	root := filepath.Join(programs, "Cryol Agent")
 	state := filepath.Join(root, "state")
 	executable := filepath.Join(root, "cryol-agent.exe")
@@ -199,6 +207,18 @@ func installService(ctx context.Context, log *slog.Logger, args []string) (resul
 		return err
 	}
 
+	backup, err := archivePreviousInstall(root, *archiveExisting)
+	if err != nil {
+		return err
+	}
+	if backup != "" {
+		fmt.Println("Previous Cryol files were archived at", backup)
+		defer func() {
+			if result != nil {
+				result = fmt.Errorf("%w. Previous files are preserved at %s", result, backup)
+			}
+		}()
+	}
 	if err := secureDirectory(root, `O:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;GRGX;;;LS)`); err != nil {
 		return fmt.Errorf("create protected installation directory: %w", err)
 	}
@@ -244,11 +264,12 @@ func installService(ctx context.Context, log *slog.Logger, args []string) (resul
 	if err := configureServiceRecovery(service); err != nil {
 		return err
 	}
-	if err := eventlog.InstallAsEventCreate(serviceName, eventlog.Error|eventlog.Warning|eventlog.Info); err != nil {
+	createdSource, err := ensureServiceEventSource()
+	if err != nil {
 		return fmt.Errorf("register Windows event log source: %w", err)
 	}
 	defer func() {
-		if !retain {
+		if !retain && createdSource {
 			_ = eventlog.Remove(serviceName)
 		}
 	}()
@@ -275,6 +296,54 @@ func installService(ctx context.Context, log *slog.Logger, args []string) (resul
 	fmt.Println("Cryol Agent is enrolled and running in the background.")
 	fmt.Println("Open Endpoint agents in Cryol and check Last scan for the first inventory.")
 	return nil
+}
+
+func archivePreviousInstall(root string, allowed bool) (string, error) {
+	path, err := windows.UTF16PtrFromString(root)
+	if err != nil {
+		return "", err
+	}
+	attributes, err := windows.GetFileAttributes(path)
+	if errors.Is(err, windows.ERROR_FILE_NOT_FOUND) || errors.Is(err, windows.ERROR_PATH_NOT_FOUND) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("check existing Cryol directory: %w", err)
+	}
+	if attributes&windows.FILE_ATTRIBUTE_DIRECTORY == 0 || attributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+		return "", errors.New("the Cryol installation path is a file or a redirected directory. Setup left it unchanged")
+	}
+	if !allowed {
+		return "", errors.New("the Cryol directory already exists. If the service is no longer registered, reopen Setup and choose Archive previous local files and enroll")
+	}
+
+	// Archive on the same volume so existing filesystem permissions and data are preserved.
+	backup := root + " Backup " + time.Now().Format("20060102-150405") + " " + inventory.NewID()[:8]
+	target, err := windows.UTF16PtrFromString(backup)
+	if err != nil {
+		return "", err
+	}
+	if err := windows.MoveFile(path, target); err != nil {
+		return "", fmt.Errorf("could not archive previous Cryol files: %w", err)
+	}
+	return backup, nil
+}
+
+func ensureServiceEventSource() (bool, error) {
+	const path = `SYSTEM\CurrentControlSet\Services\EventLog\Application\CryolAgent`
+	key, err := registry.OpenKey(registry.LOCAL_MACHINE, path, registry.QUERY_VALUE)
+	if errors.Is(err, windows.ERROR_FILE_NOT_FOUND) {
+		return true, eventlog.InstallAsEventCreate(serviceName, eventlog.Error|eventlog.Warning|eventlog.Info)
+	}
+	if err != nil {
+		return false, err
+	}
+	defer key.Close()
+	messageFile, _, err := key.GetStringValue("EventMessageFile")
+	if err != nil || !strings.EqualFold(messageFile, `%SystemRoot%\System32\EventCreate.exe`) {
+		return false, errors.New("an unexpected CryolAgent Event Viewer configuration exists")
+	}
+	return false, nil
 }
 
 func configureServiceStartup(service *mgr.Service) error {
