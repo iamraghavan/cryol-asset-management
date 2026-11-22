@@ -46,6 +46,16 @@ func MountAgents(r chi.Router, pool *pgxpool.Pool) {
 				setupOptions(w, r)
 			}
 		})
+		r.Get("/api/v1/agents/setup/windows-installer", func(w http.ResponseWriter, r *http.Request) {
+			if _, ok := authorize(w, r, pool, "agents.enroll"); ok {
+				serveWindowsInstaller(w, r)
+			}
+		})
+		r.Get("/api/v1/agents/setup/ca", func(w http.ResponseWriter, r *http.Request) {
+			if _, ok := authorize(w, r, pool, "agents.enroll"); ok {
+				serveSetupCA(w, r)
+			}
+		})
 		r.Get("/api/v1/agents/setup/{platform}", func(w http.ResponseWriter, r *http.Request) {
 			if _, ok := authorize(w, r, pool, "agents.enroll"); ok {
 				serveSetup(w, r)

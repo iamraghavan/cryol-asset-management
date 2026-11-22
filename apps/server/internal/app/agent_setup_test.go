@@ -96,3 +96,23 @@ func TestConfiguredSetupOriginAndInvalidCA(t *testing.T) {
 		t.Fatal("non-certificate block was accepted")
 	}
 }
+
+func TestWindowsInstallerDownload(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "Cryol-Agent-Setup-x64.exe")
+	t.Setenv("CRYOL_WINDOWS_AGENT_INSTALLER", path)
+	t.Setenv("CRYOL_AGENT_SETUP_ORIGIN", "https://cryol.test:8443")
+	r := httptest.NewRequest("GET", "http://localhost:8080/api/v1/agents/setup/windows-installer", nil)
+	w := httptest.NewRecorder()
+	serveWindowsInstaller(w, r)
+	if w.Code != 404 {
+		t.Fatalf("unconfigured artifact returned %d", w.Code)
+	}
+	if err := os.WriteFile(path, []byte("MZtest installer"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	w = httptest.NewRecorder()
+	serveWindowsInstaller(w, r)
+	if w.Code != 200 || w.Body.String() != "MZtest installer" || !strings.Contains(w.Header().Get("Content-Disposition"), "Cryol-Agent-Setup-x64.exe") {
+		t.Fatalf("incorrect installer response: %d %v", w.Code, w.Header())
+	}
+}

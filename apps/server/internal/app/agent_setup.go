@@ -95,15 +95,90 @@ func openSetupBinary(platform string) (*os.File, error) {
 func setupOptions(w http.ResponseWriter, r *http.Request) {
 	origin, ok := setupOrigin(r)
 	platforms := []string{}
-	if _, err := setupCA(); ok && err == nil {
+	installerAvailable, caAvailable := false, false
+	if ca, err := setupCA(); ok && err == nil {
+		caAvailable = len(ca) > 0
 		for _, platform := range []string{"windows", "linux"} {
 			if file, err := openSetupBinary(platform); err == nil {
 				file.Close()
 				platforms = append(platforms, platform)
 			}
 		}
+		if strings.HasPrefix(origin, "https://") {
+			if file, err := openWindowsInstaller(); err == nil {
+				file.Close()
+				installerAvailable = true
+			}
+		}
 	}
-	reply(w, http.StatusOK, map[string]any{"origin": origin, "platforms": platforms})
+	reply(w, http.StatusOK, map[string]any{
+		"origin": origin, "platforms": platforms, "windowsInstaller": installerAvailable, "publicCA": caAvailable,
+	})
+}
+
+func openWindowsInstaller() (*os.File, error) {
+	path := os.Getenv("CRYOL_WINDOWS_AGENT_INSTALLER")
+	if path == "" {
+		return nil, os.ErrNotExist
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() || info.Size() < 2 || info.Size() > 128<<20 {
+		file.Close()
+		return nil, os.ErrInvalid
+	}
+	var magic [2]byte
+	if _, err = io.ReadFull(file, magic[:]); err != nil || string(magic[:]) != "MZ" {
+		file.Close()
+		return nil, os.ErrInvalid
+	}
+	if _, err = file.Seek(0, io.SeekStart); err != nil {
+		file.Close()
+		return nil, err
+	}
+	return file, nil
+}
+
+func serveWindowsInstaller(w http.ResponseWriter, r *http.Request) {
+	origin, ok := setupOrigin(r)
+	if !ok || !strings.HasPrefix(origin, "https://") {
+		fail(w, r, 409, "SETUP_ORIGIN_UNAVAILABLE", "Configure the endpoint-facing HTTPS server before downloading the installer.")
+		return
+	}
+	if _, err := setupCA(); err != nil {
+		fail(w, r, 503, "SETUP_CA_UNAVAILABLE", "The setup CA must contain only public CA certificates.")
+		return
+	}
+	file, err := openWindowsInstaller()
+	if err != nil {
+		fail(w, r, 404, "SETUP_UNAVAILABLE", "The Windows installer is unavailable.")
+		return
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		fail(w, r, 503, "SETUP_UNAVAILABLE", "The Windows installer cannot be read.")
+		return
+	}
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Disposition", `attachment; filename="Cryol-Agent-Setup-x64.exe"`)
+	w.Header().Set("Cache-Control", "no-store")
+	http.ServeContent(w, r, "Cryol-Agent-Setup-x64.exe", info.ModTime(), file)
+}
+
+func serveSetupCA(w http.ResponseWriter, r *http.Request) {
+	ca, err := setupCA()
+	if err != nil || len(ca) == 0 {
+		fail(w, r, 404, "SETUP_CA_UNAVAILABLE", "The public setup CA is unavailable.")
+		return
+	}
+	w.Header().Set("Content-Type", "application/x-pem-file")
+	w.Header().Set("Content-Disposition", `attachment; filename="cryol-ca.pem"`)
+	w.Header().Set("Cache-Control", "no-store")
+	_, _ = w.Write(ca)
 }
 
 func serveSetup(w http.ResponseWriter, r *http.Request) {

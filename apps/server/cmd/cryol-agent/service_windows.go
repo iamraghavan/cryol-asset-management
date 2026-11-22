@@ -96,9 +96,35 @@ func installService(ctx context.Context, log *slog.Logger, args []string) (resul
 	interval := fs.Duration("interval", 5*time.Minute, "inventory scan interval")
 	local := fs.Bool("local-http", false, "allow an explicit same-computer development connection")
 	showToken := fs.Bool("show-token", false, "show enrollment input while typing or pasting")
+	installerInput := fs.Bool("installer-input", false, "accept the enrollment token from the elevated setup process")
 	pause := fs.Bool("pause", false, "keep the elevated setup window open after installation")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	var token []byte
+	if *installerInput {
+		if !windows.GetCurrentProcessToken().IsElevated() {
+			return errors.New("the setup wizard must be elevated")
+		}
+		*server = os.Getenv("CRYOL_SETUP_SERVER")
+		*ca = os.Getenv("CRYOL_SETUP_CA")
+		rawInterval := os.Getenv("CRYOL_SETUP_INTERVAL")
+		token = []byte(os.Getenv("CRYOL_SETUP_ENROLLMENT_TOKEN"))
+		defer clear(token)
+		for _, key := range []string{"CRYOL_SETUP_SERVER", "CRYOL_SETUP_CA", "CRYOL_SETUP_INTERVAL", "CRYOL_SETUP_ENROLLMENT_TOKEN"} {
+			if err := os.Unsetenv(key); err != nil {
+				return err
+			}
+		}
+		parsed, err := time.ParseDuration(rawInterval)
+		if err != nil || parsed < time.Minute {
+			return errors.New("enter a scan interval of at least one minute, for example 5m")
+		}
+		*interval = parsed
+		if !validEnrollmentToken(token) {
+			return errors.New("enter a valid enrollment token from the Cryol console")
+		}
+		*local = false
 	}
 	if fs.NArg() != 0 || *server == "" || *interval < time.Minute {
 		return errors.New("provide a server address and a scan interval of at least one minute")
@@ -216,7 +242,7 @@ func installService(ctx context.Context, log *slog.Logger, args []string) (resul
 	if *showToken {
 		enrollArgs = append(enrollArgs, "-show-token")
 	}
-	if err := runInventory(ctx, log, enrollArgs); err != nil {
+	if err := runInventoryWithEnrollment(ctx, log, enrollArgs, token); err != nil {
 		return err
 	}
 
