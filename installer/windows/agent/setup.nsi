@@ -15,10 +15,10 @@ SetCompressor /SOLID lzma
   !define OUTPUT_EXE "Cryol-Agent-Setup-x64.exe"
 !endif
 !ifndef PRODUCT_VERSION
-  !define PRODUCT_VERSION "0.2.0"
+  !define PRODUCT_VERSION "0.3.0"
 !endif
 !ifndef FILE_VERSION
-  !define FILE_VERSION "0.2.0.0"
+  !define FILE_VERSION "0.3.0.0"
 !endif
 !ifndef DEFAULT_SERVER
   !define DEFAULT_SERVER ""
@@ -69,6 +69,7 @@ Var TokenControl
 Var CAControl
 Var IntervalControl
 Var RevealControl
+Var BundledCA
 
 Function .onInit
   ${IfNot} ${RunningX64}
@@ -78,6 +79,7 @@ Function .onInit
   SetRegView 64
   StrCpy $Server "${DEFAULT_SERVER}"
   StrCpy $Interval "5m"
+  StrCpy $BundledCA "0"
   StrCpy $Mode "install"
   StrCpy $HasService "0"
   ClearErrors
@@ -108,6 +110,9 @@ Function OperationPage
     EnableWindow $RepairRadio 0
   ${Else}
     EnableWindow $InstallRadio 0
+    ${NSD_CreateButton} 12u 108u 55% 15u "Check service status"
+    Pop $0
+    ${NSD_OnClick} $0 CheckInstalledService
   ${EndIf}
   ${If} $Mode == "repair"
     ${NSD_Check} $RepairRadio
@@ -115,6 +120,19 @@ Function OperationPage
     ${NSD_Check} $InstallRadio
   ${EndIf}
   nsDialogs::Show
+FunctionEnd
+
+Function CheckInstalledService
+  Pop $0
+  Call StageSetupFiles
+  nsExec::ExecToStack /TIMEOUT=15000 '"$PLUGINSDIR\cryol-agent.exe" status-service'
+  Pop $1
+  Pop $2
+  ${If} $1 == "0"
+    MessageBox MB_ICONINFORMATION "$2"
+  ${Else}
+    MessageBox MB_ICONEXCLAMATION "Windows service check failed.$\r$\n$\r$\n$2"
+  ${EndIf}
 FunctionEnd
 
 Function OperationLeave
@@ -139,8 +157,11 @@ Function EnrollmentPage
   ${EndIf}
   ${NSD_CreateLabel} 0 0 100% 12u "Cryol server address (HTTPS)"
   Pop $0
-  ${NSD_CreateText} 0 13u 100% 13u "$Server"
+  ${NSD_CreateText} 0 13u 70% 13u "$Server"
   Pop $ServerControl
+  ${NSD_CreateButton} 72% 13u 28% 13u "Test connection"
+  Pop $0
+  ${NSD_OnClick} $0 TestConnection
   ${NSD_CreateLabel} 0 34u 100% 12u "One-use token from Endpoint agents > New enrollment"
   Pop $0
   ${NSD_CreatePassword} 0 47u 100% 13u "$Token"
@@ -148,13 +169,20 @@ Function EnrollmentPage
   ${NSD_CreateCheckbox} 0 63u 100% 12u "Show token"
   Pop $RevealControl
   ${NSD_OnClick} $RevealControl ToggleToken
-  ${NSD_CreateLabel} 0 81u 100% 12u "Public CA certificate (optional, for a private server certificate)"
-  Pop $0
-  ${NSD_CreateFileRequest} 0 94u 79% 13u "$CA"
-  Pop $CAControl
-  ${NSD_CreateButton} 81% 94u 19% 13u "Browse..."
-  Pop $0
-  ${NSD_OnClick} $0 ChooseCA
+  !ifdef PUBLIC_CA_PEM
+    StrCpy $CA "$PLUGINSDIR\cryol-ca.pem"
+    StrCpy $BundledCA "1"
+    ${NSD_CreateLabel} 0 86u 100% 22u "This setup includes the Cryol public CA. Windows trust settings stay the same."
+    Pop $0
+  !else
+    ${NSD_CreateLabel} 0 81u 100% 12u "Public CA certificate (PEM, only for private HTTPS)"
+    Pop $0
+    ${NSD_CreateFileRequest} 0 94u 79% 13u "$CA"
+    Pop $CAControl
+    ${NSD_CreateButton} 81% 94u 19% 13u "Browse..."
+    Pop $0
+    ${NSD_OnClick} $0 ChooseCA
+  !endif
   ${NSD_CreateLabel} 0 114u 100% 12u "Inventory interval, for example 5m or 1h"
   Pop $0
   ${NSD_CreateText} 0 127u 55% 13u "$Interval"
@@ -183,10 +211,44 @@ Function ChooseCA
   ${EndIf}
 FunctionEnd
 
+Function StageSetupFiles
+  InitPluginsDir
+  SetOutPath "$PLUGINSDIR"
+  File /oname=cryol-agent.exe "${AGENT_EXE}"
+  !ifdef PUBLIC_CA_PEM
+    File /oname=cryol-ca.pem "${PUBLIC_CA_PEM}"
+  !endif
+FunctionEnd
+
+Function TestConnection
+  Pop $0
+  ${NSD_GetText} $ServerControl $Server
+  ${If} $BundledCA == "0"
+    ${NSD_GetText} $CAControl $CA
+  ${EndIf}
+  Call StageSetupFiles
+  StrCpy $3 $Server
+  System::Call 'Kernel32::SetEnvironmentVariableW(w "CRYOL_SETUP_SERVER", w r3) i.r0'
+  StrCpy $3 $CA
+  System::Call 'Kernel32::SetEnvironmentVariableW(w "CRYOL_SETUP_CA", w r3) i.r0'
+  nsExec::ExecToStack /TIMEOUT=15000 '"$PLUGINSDIR\cryol-agent.exe" check-connection -wizard-input'
+  Pop $1
+  Pop $2
+  System::Call 'Kernel32::SetEnvironmentVariableW(w "CRYOL_SETUP_SERVER", p 0)'
+  System::Call 'Kernel32::SetEnvironmentVariableW(w "CRYOL_SETUP_CA", p 0)'
+  ${If} $1 == "0"
+    MessageBox MB_ICONINFORMATION "$2"
+  ${Else}
+    MessageBox MB_ICONEXCLAMATION "Cryol connection failed.$\r$\n$\r$\n$2"
+  ${EndIf}
+FunctionEnd
+
 Function EnrollmentLeave
   ${NSD_GetText} $ServerControl $Server
   ${NSD_GetText} $TokenControl $Token
-  ${NSD_GetText} $CAControl $CA
+  ${If} $BundledCA == "0"
+    ${NSD_GetText} $CAControl $CA
+  ${EndIf}
   ${NSD_GetText} $IntervalControl $Interval
   StrCpy $0 $Server 8
   StrLen $1 $Token
@@ -197,6 +259,7 @@ Function EnrollmentLeave
     Abort
   ${EndIf}
   ${If} $CA != ""
+  ${AndIf} $BundledCA == "0"
     IfFileExists "$CA" +3
     MessageBox MB_ICONEXCLAMATION "The selected certificate could not be found."
     Abort
@@ -204,8 +267,7 @@ Function EnrollmentLeave
 FunctionEnd
 
 Section "Install Cryol Endpoint Inventory"
-  SetOutPath "$PLUGINSDIR"
-  File /oname=cryol-agent.exe "${AGENT_EXE}"
+  Call StageSetupFiles
   ${If} $Mode == "repair"
     DetailPrint "Checking the existing service and restoring Automatic startup..."
     nsExec::ExecToStack /TIMEOUT=45000 '"$PLUGINSDIR\cryol-agent.exe" repair-service'

@@ -1,6 +1,13 @@
 name: Windows agent setup
 on:
   workflow_dispatch:
+    inputs:
+      server_origin:
+        description: Optional endpoint-facing HTTPS URL
+        type: string
+      public_ca_pem_base64:
+        description: Optional base64-encoded public CA PEM. Never provide a private key.
+        type: string
   push:
     paths:
       - 'apps/server/**'
@@ -29,7 +36,16 @@ jobs:
             --pattern nsis-bundle-3.13.tar.gz --output "$RUNNER_TEMP/cryol-nsis/bundle.tar.gz"
           tar -xzf "$RUNNER_TEMP/cryol-nsis/bundle.tar.gz" -C "$RUNNER_TEMP/cryol-nsis"
           printf 'MAKENSIS=%s\n' "$RUNNER_TEMP/cryol-nsis/nsis-bundle/makensis" >> "$GITHUB_ENV"
-      - run: installer/windows/agent/build.sh
+      - name: Build installer
+        env:
+          CRYOL_WINDOWS_DEFAULT_SERVER: ${{ inputs.server_origin }}
+          CRYOL_BUILD_PUBLIC_CA_BASE64: ${{ inputs.public_ca_pem_base64 }}
+        run: |
+          if [ -n "$CRYOL_BUILD_PUBLIC_CA_BASE64" ]; then
+            printf '%s' "$CRYOL_BUILD_PUBLIC_CA_BASE64" | base64 -d > "$RUNNER_TEMP/cryol-public-ca.pem"
+            export CRYOL_WINDOWS_PUBLIC_CA="$RUNNER_TEMP/cryol-public-ca.pem"
+          fi
+          installer/windows/agent/build.sh
       - uses: actions/upload-artifact@v4
         with:
           name: cryol-windows-agent-unsigned-x64

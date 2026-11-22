@@ -29,6 +29,11 @@ func platformCommand(ctx context.Context, log *slog.Logger, args []string) (bool
 	switch args[0] {
 	case "install-service":
 		return true, installService(ctx, log, args[1:])
+	case "status-service":
+		if len(args) != 1 {
+			return true, errors.New("usage: cryol-agent status-service")
+		}
+		return true, installedServiceStatus()
 	case "repair-service":
 		if len(args) != 1 {
 			return true, errors.New("usage: cryol-agent repair-service")
@@ -331,6 +336,60 @@ func readServiceIdentity(handle windows.Handle) (command, account string, servic
 		return "", "", 0, err
 	}
 	return windows.UTF16PtrToString(config.BinaryPathName), windows.UTF16PtrToString(config.ServiceStartName), config.ServiceType, nil
+}
+
+func installedServiceStatus() error {
+	manager, err := mgr.Connect()
+	if err != nil {
+		return err
+	}
+	defer manager.Disconnect()
+	service, err := manager.OpenService(serviceName)
+	if errors.Is(err, windows.ERROR_SERVICE_DOES_NOT_EXIST) {
+		fmt.Println("Cryol Endpoint Inventory is not registered.")
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	defer service.Close()
+	status, err := service.Query()
+	if err != nil {
+		return err
+	}
+	states := map[svc.State]string{svc.Running: "Running", svc.Stopped: "Stopped", svc.StartPending: "Starting", svc.StopPending: "Stopping", svc.Paused: "Paused"}
+	name := states[status.State]
+	if name == "" {
+		name = fmt.Sprintf("State %d", status.State)
+	}
+	fmt.Printf("Cryol Endpoint Inventory: %s\r\nWindows exit code: %d\r\n", name, status.Win32ExitCode)
+	if cfg, err := service.Config(); err == nil {
+		if cfg.StartType == mgr.StartAutomatic {
+			fmt.Println("Startup: Automatic")
+		} else {
+			fmt.Println("Startup: Not automatic")
+		}
+		if cfg.Description == "" {
+			fmt.Println("Service description is missing.")
+		}
+	} else {
+		fmt.Println("Windows could not read all service settings.")
+	}
+	root, err := windows.KnownFolderPath(windows.FOLDERID_ProgramFiles, 0)
+	if err != nil {
+		return err
+	}
+	for _, item := range []struct{ name, path string }{
+		{"Installed executable", filepath.Join(root, "Cryol Agent", "cryol-agent.exe")},
+		{"Enrollment file", filepath.Join(root, "Cryol Agent", "state", "identity.json")},
+	} {
+		label := "missing or unreadable"
+		if info, err := os.Lstat(item.path); err == nil && info.Mode().IsRegular() {
+			label = "present"
+		}
+		fmt.Printf("%s: %s\r\n", item.name, label)
+	}
+	return nil
 }
 
 func repairService(ctx context.Context) error {

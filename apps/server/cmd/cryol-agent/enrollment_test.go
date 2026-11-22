@@ -53,3 +53,40 @@ func TestVisibleEnrollmentInput(t *testing.T) {
 		}
 	}
 }
+
+func TestServerOriginForLAN(t *testing.T) {
+	for _, value := range []string{
+		"https://192.168.1.2:8443",
+		"https://cryol.example.internal:8443",
+		"https://[fd00::12]:8443",
+	} {
+		if _, err := parseServerOrigin(value, false); err != nil {
+			t.Fatalf("rejected %s: %v", value, err)
+		}
+	}
+	for _, value := range []string{
+		"http://192.168.1.2:8443",
+		"https://name:secret@cryol.example.internal",
+		"https://cryol.example.internal/other-path",
+	} {
+		if _, err := parseServerOrigin(value, false); err == nil {
+			t.Fatalf("accepted %s", value)
+		}
+	}
+}
+
+func TestEnrollmentIdentifiesUntrustedIssuer(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"status":"ready"}`))
+	}))
+	defer server.Close()
+	origin, _ := url.Parse(server.URL)
+	client, err := newClient("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = checkEnrollmentServer(context.Background(), client, origin)
+	if err == nil || !strings.Contains(err.Error(), "issuer is not trusted") {
+		t.Fatalf("did not identify the untrusted issuer: %v", err)
+	}
+}

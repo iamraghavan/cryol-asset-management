@@ -16,6 +16,7 @@ import (
 	"math/rand/v2"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"net/url"
 	"os"
 	"os/signal"
@@ -55,6 +56,9 @@ func main() {
 
 func run(ctx context.Context, log *slog.Logger, args []string) error {
 	if len(args) > 0 {
+		if args[0] == "check-connection" {
+			return checkConnectionCommand(ctx, args[1:], os.Stdout)
+		}
 		if handled, err := platformCommand(ctx, log, args); handled {
 			return err
 		}
@@ -84,12 +88,9 @@ func runInventoryWithEnrollment(ctx context.Context, log *slog.Logger, args []st
 	if (mode != "setup" && mode != "enroll" && mode != "scan" && mode != "run") || fs.NArg() != 0 || *stateDir == "" || *interval < time.Minute {
 		return errors.New("choose setup, enroll, scan or run, provide -state-dir and use a scan interval of at least one minute")
 	}
-	origin, err := url.Parse(*server)
-	if err != nil || (origin.Scheme != "https" && origin.Scheme != "http") || origin.Hostname() == "" || origin.User != nil || (origin.Path != "" && origin.Path != "/") || origin.RawQuery != "" || origin.Fragment != "" || origin.ForceQuery {
-		return errors.New("server must be a valid origin")
-	}
-	if origin.Scheme == "http" && (!*localHTTP || !inventory.IsLoopbackHost(origin.Hostname())) {
-		return errors.New("HTTPS is required except for explicitly enabled same-machine tests")
+	origin, err := parseServerOrigin(*server, *localHTTP)
+	if err != nil {
+		return err
 	}
 	base := strings.TrimSuffix(origin.String(), "/")
 	client, err := newClient(*caFile)
@@ -251,6 +252,52 @@ func validEnrollmentToken(input []byte) bool {
 	return err == nil && n == len(decoded)
 }
 
+func parseServerOrigin(value string, localHTTP bool) (*url.URL, error) {
+	origin, err := url.Parse(strings.TrimSpace(value))
+	if err != nil || (origin.Scheme != "https" && origin.Scheme != "http") || origin.Hostname() == "" || origin.User != nil ||
+		(origin.Path != "" && origin.Path != "/") || origin.RawQuery != "" || origin.Fragment != "" || origin.ForceQuery {
+		return nil, errors.New("enter the full server URL, such as https://cryol.example.internal:8443")
+	}
+	if origin.Scheme == "http" && (!localHTTP || !inventory.IsLoopbackHost(origin.Hostname())) {
+		return nil, errors.New("use an HTTPS address for the Cryol server")
+	}
+	return origin, nil
+}
+
+func checkConnectionCommand(ctx context.Context, args []string, out io.Writer) error {
+	fs := flag.NewFlagSet("check-connection", flag.ContinueOnError)
+	server := fs.String("server", "", "Cryol HTTPS address")
+	ca := fs.String("ca", "", "optional public CA PEM")
+	wizard := fs.Bool("wizard-input", false, "read non-secret connection settings from the setup wizard")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return errors.New("remove unexpected connection-check arguments")
+	}
+	if *wizard {
+		*server = os.Getenv("CRYOL_SETUP_SERVER")
+		*ca = os.Getenv("CRYOL_SETUP_CA")
+	}
+	origin, err := parseServerOrigin(*server, false)
+	if err != nil {
+		return err
+	}
+	client, err := newClient(*ca)
+	if err != nil {
+		return fmt.Errorf("cannot load the Cryol public CA: %w", err)
+	}
+	var local, remote string
+	trace := &httptrace.ClientTrace{GotConn: func(info httptrace.GotConnInfo) {
+		local, remote = info.Conn.LocalAddr().String(), info.Conn.RemoteAddr().String()
+	}}
+	if err := checkEnrollmentServer(httptrace.WithClientTrace(ctx, trace), client, origin); err != nil {
+		return err
+	}
+	fmt.Fprintf(out, "Cryol HTTPS verified and inventory endpoint ready.\r\nServer: %s\r\nConnection: %s to %s\r\n", origin, local, remote)
+	return nil
+}
+
 func checkEnrollmentServer(ctx context.Context, client *http.Client, origin *url.URL) error {
 	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
@@ -262,6 +309,24 @@ func checkEnrollmentServer(ctx context.Context, client *http.Client, origin *url
 	if err != nil {
 		if origin.Scheme == "http" && inventory.IsLoopbackHost(origin.Hostname()) {
 			return fmt.Errorf("Cryol is not reachable at %s. This bundle is for the computer running Cryol. For another computer, open Cryol at its LAN HTTPS address and download a new bundle: %w", origin, err)
+		}
+		var unknownCA x509.UnknownAuthorityError
+		var hostMismatch x509.HostnameError
+		var certificate x509.CertificateInvalidError
+		var dns *net.DNSError
+		switch {
+		case errors.As(err, &unknownCA):
+			return fmt.Errorf("the server certificate issuer is not trusted. Use a Cryol setup with the server's public CA: %w", err)
+		case errors.As(err, &hostMismatch):
+			return fmt.Errorf("the server certificate does not cover this DNS name or IP address: %w", err)
+		case errors.As(err, &certificate):
+			return fmt.Errorf("the server certificate is invalid or expired: %w", err)
+		case errors.As(err, &dns):
+			return fmt.Errorf("This endpoint could not resolve the server name. Check DNS or use the server IP if its certificate covers that IP: %w", err)
+		case errors.Is(err, context.DeadlineExceeded):
+			return fmt.Errorf("no response from Cryol at %s. Check the endpoint's LAN or VPN route, server port, and network firewall: %w", origin, err)
+		case errors.Is(err, syscall.ECONNREFUSED):
+			return fmt.Errorf("the server refused the connection at %s. Check that Cryol is listening on that HTTPS port: %w", origin, err)
 		}
 		return fmt.Errorf("cannot establish a trusted connection to Cryol at %s. Check the address, network access, and server certificate: %w", origin, err)
 	}

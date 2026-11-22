@@ -34,3 +34,17 @@ The **Signed Windows agent setup** workflow is manual and restricted to `main`. 
 For managed internal PCs, an organization can instead use its own approved enterprise code-signing certificate and distribute trust using its endpoint management policy. Sign the agent and installer in the same order on an authorized Windows signing workstation. The Cryol LAN HTTPS CA is for server authentication and is separate from Windows code signing. The NSIS-generated uninstaller is not covered by the installer signature.
 
 [Microsoft Artifact Signing quickstart](https://learn.microsoft.com/en-us/azure/artifact-signing/quickstart) · [GitHub signing integration](https://learn.microsoft.com/en-us/azure/artifact-signing/how-to-signing-integrations) · [Microsoft signing action](https://github.com/Azure/artifact-signing-action)
+
+## Preconfigured LAN installer and diagnostics
+
+Version 0.3.0 adds a **Test connection** button. It performs the same TLS and readiness checks as enrollment before any token is sent. Errors distinguish DNS resolution, timeouts, refused TCP connections and certificate trust or name failures. A successful probe shows the local and remote addresses used. Enter a DNS name, IPv4 address, or bracketed IPv6 address covered by the server certificate. Routing and firewall rules between the two devices still apply.
+
+For an existing registration, choose **Check service status** to see Windows service state, startup mode, exit code and whether the executable and enrollment file are present. **Repair existing Cryol service** restores service settings without changing the installed binary or enrolling again.
+
+A site-specific installer can include the HTTPS server address and public CA:
+
+- Local build: set `CRYOL_WINDOWS_DEFAULT_SERVER` to the server origin and `CRYOL_WINDOWS_PUBLIC_CA` to the public CA PEM before running `installer/windows/agent/build.sh`.
+- GitHub test build: manually run **Windows agent setup**, with `server_origin` and `public_ca_pem_base64`. Supply the base64 encoding of the public PEM only. Packaging rejects non-certificate data and certificates that lack CA capability.
+- A bundled CA is used within the agent's TLS client. Windows system trust is unchanged. The signed workflow continues to build a generic artifact unless a site-specific signed packaging process is configured. The configured server URL and public CA must be built into the package before signing.
+
+The one-use enrollment token remains separate from reusable downloads. The connection test and service status check do not consume a token.
