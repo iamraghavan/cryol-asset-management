@@ -45,3 +45,9 @@ Migration 5 and the agent console implement enrollment, credential revocation, h
 The snapshot format is versioned JSON with relational device, agent, enrollment and run identity. A normalized software catalog and component-level current tables, change detection, cross-device reporting and license management remain open, alongside organization and custody modules. The [endpoint operations guide](../operations/endpoint-agents.md) documents setup and collector coverage.
 
 Verified on macOS with PostgreSQL 17.9. Go integration tests covered HTTPS enforcement, one-use enrollment, heartbeat, replay-safe inventory ingestion, conflicts, retention of the last complete software report, explicit linking and unlinking, and credential revocation. Playwright passed console token creation and revocation plus the existing asset workflow. Frontend build, lint and Vitest passed. The Linux and Windows amd64 agent binaries cross-compiled. Their native collectors and background service behavior still need testing on the target systems.
+
+## Windows background agent
+
+The Windows console bundle now requests UAC approval, enrolls using a one-use token, and registers Cryol Endpoint Inventory for delayed automatic startup as LocalService. Windows Event Viewer receives agent logs. The Windows collector adds reported BIOS information, physical memory, and fixed-volume capacity and available space. Linux retains its foreground launcher.
+
+Verified Go checks, disposable PostgreSQL integration tests, Windows amd64 cross-build and vet, frontend checks, Playwright, and the live Windows ZIP download. Windows installation, collector execution, reboot behavior and removal remain unverified on a native host.

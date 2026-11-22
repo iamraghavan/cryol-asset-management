@@ -14,7 +14,7 @@ test('administrator creates and revokes an unused enrollment token', async ({ pa
   if (process.env.CRYOL_E2E_SETUP === '1') {
     const download = page.waitForEvent('download')
     await enrollment.getByRole('link', { name: 'Windows x64' }).click()
-    expect((await download).suggestedFilename()).toBe('cryol-agent-windows-x64.zip')
+    expect((await download).suggestedFilename()).toBe('cryol-agent-windows-service-x64.zip')
     await expect(enrollment.getByText('This download is for a test agent on this computer.')).toBeVisible()
   }
   await enrollment.getByRole('button', { name: 'Generate token' }).click()

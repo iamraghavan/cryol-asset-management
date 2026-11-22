@@ -45,24 +45,33 @@ func main() {
 	log := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if err := run(ctx, log); err != nil && !errors.Is(err, context.Canceled) {
+	if err := run(ctx, log, os.Args[1:]); err != nil && !errors.Is(err, context.Canceled) {
 		log.Error("agent stopped", "error", err)
 		os.Exit(1)
 	}
 }
 
-func run(ctx context.Context, log *slog.Logger) error {
+func run(ctx context.Context, log *slog.Logger, args []string) error {
+	if len(args) > 0 {
+		if handled, err := platformCommand(ctx, log, args); handled {
+			return err
+		}
+	}
+	return runInventory(ctx, log, args)
+}
+
+func runInventory(ctx context.Context, log *slog.Logger, args []string) error {
 	fs := flag.NewFlagSet("cryol-agent", flag.ContinueOnError)
 	server := fs.String("server", "", "Cryol HTTPS server origin")
 	caFile := fs.String("ca", "", "PEM file for an internal certificate authority")
 	stateDir := fs.String("state-dir", "", "dedicated service-account state directory")
 	localHTTP := fs.Bool("local-http", false, "allow HTTP only for a same-machine loopback test")
 	interval := fs.Duration("interval", 24*time.Hour, "inventory scan interval")
-	if len(os.Args) < 2 {
+	if len(args) == 0 {
 		return errors.New("usage: cryol-agent setup|enroll|scan|run -server https://HOST -state-dir DIR [-ca file]")
 	}
-	mode := os.Args[1]
-	if err := fs.Parse(os.Args[2:]); err != nil {
+	mode := args[0]
+	if err := fs.Parse(args[1:]); err != nil {
 		return err
 	}
 	if (mode != "setup" && mode != "enroll" && mode != "scan" && mode != "run") || fs.NArg() != 0 || *stateDir == "" || *interval < time.Minute {
@@ -106,14 +115,11 @@ func run(ctx context.Context, log *slog.Logger) error {
 	if err != nil || !info.IsDir() || (runtime.GOOS != "windows" && info.Mode().Perm()&0077 != 0) {
 		return errors.New("state directory must be accessible only to the service account")
 	}
-	// An exclusive local lock protects enrollment and queued writes from concurrent invocations.
-	lock := filepath.Join(*stateDir, "agent.lock")
-	handle, err := os.OpenFile(lock, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	unlock, err := lockAgent(filepath.Join(*stateDir, "agent.lock"))
 	if err != nil {
-		return errors.New("could not acquire agent lock; verify no other agent is active")
+		return fmt.Errorf("could not acquire agent state lock: %w", err)
 	}
-	defer os.Remove(lock)
-	handle.Close()
+	defer unlock()
 	path := filepath.Join(*stateDir, "identity.json")
 	raw, readErr := os.ReadFile(path)
 	if mode == "enroll" || (mode == "setup" && errors.Is(readErr, os.ErrNotExist)) {
@@ -126,6 +132,10 @@ func run(ctx context.Context, log *slog.Logger) error {
 		fd := int(os.Stdin.Fd())
 		if !term.IsTerminal(fd) {
 			return errors.New("enrollment requires an interactive terminal")
+		}
+		fmt.Fprintln(os.Stderr, "Checking Cryol at", base)
+		if err := checkEnrollmentServer(ctx, client, origin); err != nil {
+			return err
 		}
 		fmt.Fprint(os.Stderr, "Enrollment token: ")
 		token, err := term.ReadPassword(fd)
@@ -199,6 +209,30 @@ func run(ctx context.Context, log *slog.Logger) error {
 			}
 		}
 	}
+}
+
+func checkEnrollmentServer(ctx context.Context, client *http.Client, origin *url.URL) error {
+	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	defer cancel()
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimSuffix(origin.String(), "/")+"/api/v1/system/readiness", nil)
+	if err != nil {
+		return err
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		if origin.Scheme == "http" && inventory.IsLoopbackHost(origin.Hostname()) {
+			return fmt.Errorf("Cryol is not reachable at %s. This bundle is for the computer running Cryol. For another computer, open Cryol at its LAN HTTPS address and download a new bundle: %w", origin, err)
+		}
+		return fmt.Errorf("cannot establish a trusted connection to Cryol at %s. Check the address, network access, and server certificate: %w", origin, err)
+	}
+	defer response.Body.Close()
+	var reply struct {
+		Status string `json:"status"`
+	}
+	if response.StatusCode != http.StatusOK || json.NewDecoder(io.LimitReader(response.Body, 8192)).Decode(&reply) != nil || reply.Status != "ready" {
+		return fmt.Errorf("the server at %s did not report Cryol readiness (HTTP %d). Open the Cryol console and check System status", origin, response.StatusCode)
+	}
+	return nil
 }
 
 func permanent(err error) bool {

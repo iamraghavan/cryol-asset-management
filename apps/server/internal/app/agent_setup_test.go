@@ -59,7 +59,7 @@ func TestSetupBundleOriginAndContents(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if !strings.Contains(string(source), example.origin) || strings.Contains(string(source), "-local-http") != example.local {
+			if !strings.Contains(string(source), "install-service") || !strings.Contains(string(source), example.origin) || strings.Contains(string(source), "-local-http") != example.local {
 				t.Fatalf("launcher origin or local test mode is incorrect")
 			}
 		})

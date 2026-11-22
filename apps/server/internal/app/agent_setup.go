@@ -109,7 +109,11 @@ func serveSetup(w http.ResponseWriter, r *http.Request) {
 	defer file.Close()
 
 	w.Header().Set("Content-Type", "application/zip")
-	w.Header().Set("Content-Disposition", `attachment; filename="cryol-agent-`+platform+`-x64.zip"`)
+	filename := "cryol-agent-linux-x64.zip"
+	if platform == "windows" {
+		filename = "cryol-agent-windows-service-x64.zip"
+	}
+	w.Header().Set("Content-Disposition", `attachment; filename="`+filename+`"`)
 	w.Header().Set("Cache-Control", "no-store")
 	archive := zip.NewWriter(w)
 	defer archive.Close()
@@ -135,8 +139,8 @@ func setupLauncher(platform, origin string) (string, string) {
 		local = " -local-http"
 	}
 	if platform == "windows" {
-		main := `"%~dp0cryol-agent.exe" setup -server "` + origin + `" -state-dir "%LOCALAPPDATA%\Cryol\Agent\` + key + `" -interval 5m` + local
-		script := "@echo off\r\nsetlocal DisableDelayedExpansion\r\nif not defined LOCALAPPDATA (\r\n  echo Local AppData is unavailable.\r\n  pause\r\n  exit /b 1\r\n)\r\necho Cryol Agent setup\r\necho Keep this window open to send inventory. Press Ctrl+C to stop.\r\nif exist \"%~dp0cryol-ca.pem\" (\r\n  " + main + " -ca \"%~dp0cryol-ca.pem\"\r\n) else (\r\n  " + main + "\r\n)\r\nif errorlevel 1 pause\r\n"
+		main := `"%~dp0cryol-agent.exe" install-service -server "` + origin + `" -interval 5m` + local
+		script := "@echo off\r\nsetlocal DisableDelayedExpansion\r\necho Cryol Endpoint Inventory setup\r\necho Approve the Windows administrator prompt, then paste the enrollment token.\r\nif exist \"%~dp0cryol-ca.pem\" (\r\n  " + main + " -ca \"%~dp0cryol-ca.pem\" -pause\r\n) else (\r\n  " + main + " -pause\r\n)\r\nif errorlevel 1 pause\r\n"
 		return "Start Cryol Agent.cmd", script
 	}
 	return "start-cryol-agent.sh", `#!/bin/sh

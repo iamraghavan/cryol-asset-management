@@ -28,25 +28,34 @@ type Adapter struct {
 	Addresses []string `json:"addresses,omitempty"`
 }
 
+type Volume struct {
+	Mount         string `json:"mount"`
+	CapacityBytes uint64 `json:"capacityBytes"`
+	FreeBytes     uint64 `json:"freeBytes"`
+}
+
 type Snapshot struct {
-	Version        int        `json:"version"`
-	RunID          string     `json:"runId"`
-	ScannedAt      time.Time  `json:"scannedAt"`
-	AgentVersion   string     `json:"agentVersion"`
-	Hostname       string     `json:"hostname"`
-	OSFamily       string     `json:"osFamily"`
-	OSName         string     `json:"osName"`
-	Architecture   string     `json:"architecture"`
-	LogicalCPUs    int        `json:"logicalCpus"`
-	CPUModel       string     `json:"cpuModel,omitempty"`
-	MemoryBytes    uint64     `json:"memoryBytes,omitempty"`
-	Manufacturer   string     `json:"manufacturer,omitempty"`
-	Model          string     `json:"model,omitempty"`
-	Serial         string     `json:"serial,omitempty"`
-	SystemUUID     string     `json:"systemUuid,omitempty"`
-	Network        []Adapter  `json:"network,omitempty"`
-	Software       []Software `json:"software,omitempty"`
-	SoftwareStatus string     `json:"softwareStatus"`
+	FirmwareVendor  string     `json:"firmwareVendor,omitempty"`
+	FirmwareVersion string     `json:"firmwareVersion,omitempty"`
+	Volumes         []Volume   `json:"volumes,omitempty"`
+	Version         int        `json:"version"`
+	RunID           string     `json:"runId"`
+	ScannedAt       time.Time  `json:"scannedAt"`
+	AgentVersion    string     `json:"agentVersion"`
+	Hostname        string     `json:"hostname"`
+	OSFamily        string     `json:"osFamily"`
+	OSName          string     `json:"osName"`
+	Architecture    string     `json:"architecture"`
+	LogicalCPUs     int        `json:"logicalCpus"`
+	CPUModel        string     `json:"cpuModel,omitempty"`
+	MemoryBytes     uint64     `json:"memoryBytes,omitempty"`
+	Manufacturer    string     `json:"manufacturer,omitempty"`
+	Model           string     `json:"model,omitempty"`
+	Serial          string     `json:"serial,omitempty"`
+	SystemUUID      string     `json:"systemUuid,omitempty"`
+	Network         []Adapter  `json:"network,omitempty"`
+	Software        []Software `json:"software,omitempty"`
+	SoftwareStatus  string     `json:"softwareStatus"`
 }
 
 func NewID() string {
@@ -68,9 +77,17 @@ func (s Snapshot) Validate(now time.Time) error {
 		(s.SoftwareStatus != "complete" && s.SoftwareStatus != "unavailable") || len(s.Network) > 256 || len(s.Software) > 20000 {
 		return errors.New("unsupported or out-of-bounds inventory")
 	}
-	for _, value := range []string{s.Hostname, s.AgentVersion, s.OSName, s.Architecture, s.CPUModel, s.Manufacturer, s.Model, s.Serial, s.SystemUUID} {
+	for _, value := range []string{s.Hostname, s.AgentVersion, s.OSName, s.Architecture, s.CPUModel, s.Manufacturer, s.Model, s.Serial, s.SystemUUID, s.FirmwareVendor, s.FirmwareVersion} {
 		if !textOK(value, 512) {
 			return errors.New("invalid device field")
+		}
+	}
+	if len(s.Volumes) > 128 {
+		return errors.New("too many volumes")
+	}
+	for _, volume := range s.Volumes {
+		if volume.Mount == "" || !textOK(volume.Mount, 256) || volume.CapacityBytes == 0 || volume.FreeBytes > volume.CapacityBytes {
+			return errors.New("invalid volume data")
 		}
 	}
 	if s.SoftwareStatus == "unavailable" && len(s.Software) != 0 {

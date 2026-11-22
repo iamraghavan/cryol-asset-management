@@ -1,0 +1,360 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+	"unsafe"
+
+	"golang.org/x/sys/windows"
+	"golang.org/x/sys/windows/svc"
+	"golang.org/x/sys/windows/svc/eventlog"
+	"golang.org/x/sys/windows/svc/mgr"
+)
+
+const serviceName = "CryolAgent"
+
+func platformCommand(ctx context.Context, log *slog.Logger, args []string) (bool, error) {
+	switch args[0] {
+	case "install-service":
+		return true, installService(ctx, log, args[1:])
+	case "uninstall-service":
+		if len(args) != 1 {
+			return true, errors.New("usage: cryol-agent uninstall-service")
+		}
+		return true, uninstallService(ctx)
+	case "service":
+		return true, svc.Run(serviceName, inventoryService{args: append([]string{"run"}, args[1:]...)})
+	default:
+		return false, nil
+	}
+}
+
+func lockAgent(path string) (func(), error) {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return nil, err
+	}
+	var over windows.Overlapped
+	h := windows.Handle(f.Fd())
+	if err := windows.LockFileEx(h, windows.LOCKFILE_EXCLUSIVE_LOCK|windows.LOCKFILE_FAIL_IMMEDIATELY, 0, 1, 0, &over); err != nil {
+		f.Close()
+		return nil, err
+	}
+	return func() { _ = f.Close() }, nil
+}
+
+func secureDirectory(path, descriptor string) error {
+	sd, err := windows.SecurityDescriptorFromString(descriptor)
+	if err != nil {
+		return err
+	}
+	name, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return err
+	}
+	sa := windows.SecurityAttributes{Length: uint32(unsafe.Sizeof(windows.SecurityAttributes{})), SecurityDescriptor: sd}
+	return windows.CreateDirectory(name, &sa)
+}
+
+func copySetupFile(source, target string, max int64) error {
+	in, err := os.Open(source)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	info, err := in.Stat()
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > max {
+		return errors.New("setup file is not a supported regular file")
+	}
+	out, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if err != nil {
+		return err
+	}
+	n, copyErr := io.Copy(out, io.LimitReader(in, max+1))
+	closeErr := out.Close()
+	if n > max {
+		return errors.New("setup file exceeds size limit")
+	}
+	return errors.Join(copyErr, closeErr)
+}
+
+func installService(ctx context.Context, log *slog.Logger, args []string) (result error) {
+	fs := flag.NewFlagSet("install-service", flag.ContinueOnError)
+	server := fs.String("server", "", "Cryol HTTPS server origin")
+	ca := fs.String("ca", "", "optional organization CA certificate")
+	interval := fs.Duration("interval", 5*time.Minute, "inventory scan interval")
+	local := fs.Bool("local-http", false, "allow an explicit same-computer development connection")
+	pause := fs.Bool("pause", false, "keep the elevated setup window open after installation")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 || *server == "" || *interval < time.Minute {
+		return errors.New("provide a server address and a scan interval of at least one minute")
+	}
+	if !windows.GetCurrentProcessToken().IsElevated() {
+		exec, err := os.Executable()
+		if err != nil {
+			return err
+		}
+		file, err := windows.UTF16PtrFromString(exec)
+		if err != nil {
+			return err
+		}
+		parameters, err := windows.UTF16PtrFromString(windows.ComposeCommandLine(append(append([]string{"install-service"}, args...), "-pause")))
+		if err != nil {
+			return err
+		}
+		verb, _ := windows.UTF16PtrFromString("runas")
+		return windows.ShellExecute(0, verb, file, parameters, nil, 1)
+	}
+	if *pause {
+		defer func() {
+			if result != nil {
+				fmt.Fprintln(os.Stderr, result)
+			}
+			fmt.Fprint(os.Stderr, "Press Enter to close setup. ")
+			_, _ = fmt.Fscanln(os.Stdin)
+		}()
+	}
+	programs, err := windows.KnownFolderPath(windows.FOLDERID_ProgramFiles, 0)
+	if err != nil {
+		return err
+	}
+	root := filepath.Join(programs, "Cryol Agent")
+	state := filepath.Join(root, "state")
+	executable := filepath.Join(root, "cryol-agent.exe")
+	source, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	manager, err := mgr.Connect()
+	if err != nil {
+		return err
+	}
+	defer manager.Disconnect()
+	if service, err := manager.OpenService(serviceName); err == nil {
+		defer service.Close()
+		status, err := service.Query()
+		if err != nil {
+			return err
+		}
+		if status.State == svc.Running {
+			fmt.Println("Cryol Agent is already running. Check Last scan in the Cryol console.")
+			return nil
+		}
+		return errors.New("Cryol Agent is already installed. Use Windows Services to start it or uninstall it before reinstalling")
+	} else if !errors.Is(err, windows.ERROR_SERVICE_DOES_NOT_EXIST) {
+		return err
+	}
+
+	if err := secureDirectory(root, `O:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;GRGX;;;LS)`); err != nil {
+		return fmt.Errorf("create protected installation directory: %w", err)
+	}
+	retain := false
+	defer func() {
+		if !retain {
+			_ = os.RemoveAll(root)
+		}
+	}()
+	// LocalService can write state, but cannot replace the installed program.
+	if err := secureDirectory(state, `O:BAD:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;0x1301bf;;;LS)`); err != nil {
+		return err
+	}
+	if err := copySetupFile(source, executable, 64<<20); err != nil {
+		return err
+	}
+	runArgs := []string{"-server", *server, "-state-dir", state, "-interval", interval.String()}
+	if *local {
+		runArgs = append(runArgs, "-local-http")
+	}
+	if *ca != "" {
+		cert := filepath.Join(root, "cryol-ca.pem")
+		if err := copySetupFile(*ca, cert, 2<<20); err != nil {
+			return err
+		}
+		runArgs = append(runArgs, "-ca", cert)
+	}
+	service, err := manager.CreateService(serviceName, executable, mgr.Config{
+		DisplayName:      "Cryol Endpoint Inventory",
+		Description:      "Reports authorized hardware, software and network inventory to the organization's Cryol server.",
+		StartType:        mgr.StartManual,
+		ServiceStartName: `NT AUTHORITY\LocalService`,
+	}, append([]string{"service"}, runArgs...)...)
+	if err != nil {
+		return err
+	}
+	defer service.Close()
+	defer func() {
+		if !retain {
+			_ = service.Delete()
+		}
+	}()
+	if err := service.SetRecoveryActions([]mgr.RecoveryAction{{Type: mgr.ServiceRestart, Delay: 30 * time.Second}, {Type: mgr.ServiceRestart, Delay: 2 * time.Minute}, {Type: mgr.NoAction}}, 86400); err != nil {
+		return err
+	}
+	if err := eventlog.InstallAsEventCreate(serviceName, eventlog.Error|eventlog.Warning|eventlog.Info); err != nil {
+		return fmt.Errorf("register Windows event log source: %w", err)
+	}
+	defer func() {
+		if !retain {
+			_ = eventlog.Remove(serviceName)
+		}
+	}()
+	if err := runInventory(ctx, log, append([]string{"enroll"}, runArgs...)); err != nil {
+		return err
+	}
+
+	configuration, err := service.Config()
+	if err != nil {
+		retain = true
+		return fmt.Errorf("agent enrolled, but automatic startup could not be configured: %w", err)
+	}
+	configuration.StartType = mgr.StartAutomatic
+	configuration.DelayedAutoStart = true
+	if err := service.UpdateConfig(configuration); err != nil {
+		retain = true
+		return fmt.Errorf("agent enrolled, but automatic startup could not be configured: %w", err)
+	}
+	// Keep the enrolled identity if Windows cannot start the service immediately.
+	retain = true
+	if err := service.Start(); err != nil {
+		return fmt.Errorf("agent enrolled, but Windows could not start the service: %w", err)
+	}
+	if err := waitForService(ctx, service, svc.Running); err != nil {
+		return err
+	}
+	fmt.Println("Cryol Agent is enrolled and running in the background.")
+	fmt.Println("Open Endpoint agents in Cryol and check Last scan for the first inventory.")
+	return nil
+}
+
+type inventoryService struct{ args []string }
+
+func (s inventoryService) Execute(_ []string, requests <-chan svc.ChangeRequest, status chan<- svc.Status) (bool, uint32) {
+	status <- svc.Status{State: svc.StartPending}
+	event, err := eventlog.Open(serviceName)
+	if err != nil {
+		return true, 1
+	}
+	defer event.Close()
+	log := slog.New(slog.NewJSONHandler(serviceLog{event}, nil))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- runInventory(ctx, log, s.args) }()
+	running := svc.Status{State: svc.Running, Accepts: svc.AcceptStop | svc.AcceptShutdown}
+	status <- running
+	for {
+		select {
+		case request := <-requests:
+			switch request.Cmd {
+			case svc.Interrogate:
+				status <- running
+			case svc.Stop, svc.Shutdown:
+				status <- svc.Status{State: svc.StopPending, WaitHint: 10000}
+				cancel()
+				select {
+				case <-done:
+					return false, 0
+				case <-time.After(10 * time.Second):
+					return true, 1
+				}
+			}
+		case err := <-done:
+			if err != nil {
+				log.Error("inventory service stopped", "error", err)
+			}
+			return true, 1
+		}
+	}
+}
+
+type serviceLog struct{ event *eventlog.Log }
+
+func (s serviceLog) Write(data []byte) (int, error) {
+	message := strings.TrimSpace(string(data))
+	switch {
+	case strings.Contains(message, `"level":"ERROR"`):
+		return len(data), s.event.Error(1, message)
+	case strings.Contains(message, `"level":"WARN"`):
+		return len(data), s.event.Warning(1, message)
+	default:
+		return len(data), s.event.Info(1, message)
+	}
+}
+
+func waitForService(ctx context.Context, service *mgr.Service, wanted svc.State) error {
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	timer := time.NewTicker(250 * time.Millisecond)
+	defer timer.Stop()
+	for {
+		state, err := service.Query()
+		if err != nil {
+			return err
+		}
+		if state.State == wanted {
+			return nil
+		}
+		if wanted == svc.Running && state.State == svc.Stopped {
+			return errors.New("agent service stopped during startup; check Windows Event Viewer")
+		}
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			return errors.New("timed out waiting for the Cryol Agent service")
+		}
+	}
+}
+
+func uninstallService(ctx context.Context) error {
+	if !windows.GetCurrentProcessToken().IsElevated() {
+		return errors.New("run the uninstall command as an administrator")
+	}
+	manager, err := mgr.Connect()
+	if err != nil {
+		return err
+	}
+	defer manager.Disconnect()
+	service, err := manager.OpenService(serviceName)
+	if errors.Is(err, windows.ERROR_SERVICE_DOES_NOT_EXIST) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	defer service.Close()
+	state, err := service.Query()
+	if err != nil {
+		return err
+	}
+	if state.State != svc.Stopped {
+		if state.State != svc.StopPending {
+			if _, err := service.Control(svc.Stop); err != nil && !errors.Is(err, windows.ERROR_SERVICE_NOT_ACTIVE) {
+				return err
+			}
+		}
+		if err := waitForService(ctx, service, svc.Stopped); err != nil {
+			return err
+		}
+	}
+	if err := service.Delete(); err != nil {
+		return err
+	}
+	fmt.Println("Cryol Agent service removed. Local enrollment files and server history were preserved.")
+	if err := eventlog.Remove(serviceName); err != nil && !errors.Is(err, windows.ERROR_FILE_NOT_FOUND) {
+		return fmt.Errorf("service removed, but its Event Viewer source could not be unregistered: %w", err)
+	}
+	return nil
+}

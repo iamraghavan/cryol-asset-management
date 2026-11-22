@@ -14,6 +14,8 @@ type Enrollment = { id: string; token: string; expiresAt: string }
 type Hardware = {
   osName: string; logicalCpus: number; cpuModel?: string; memoryBytes?: number; manufacturer?: string; model?: string
   serial?: string; scannedAt: string; softwareStatus: string
+  firmwareVendor?: string; firmwareVersion?: string
+  volumes?: { mount: string; capacityBytes: number; freeBytes: number }[]
   network?: { name: string; up: boolean; mac?: string; addresses?: string[] }[]
 }
 type Software = { id: string; source: string; name: string; version: string; publisher?: string }
@@ -82,7 +84,10 @@ function Enroll({ close }: { close: () => void }) {
       {setup.isError && <p role="alert">{setup.error.message} <button onClick={() => void setup.refetch()}>Retry</button></p>}
       {setup.data?.platforms.length ? <>
         <p><strong>Server</strong> {setup.data.origin}</p>
-        {setup.data.origin.startsWith('http:') && <p>This download is for a test agent on this computer.</p>}
+        {setup.data.origin.startsWith('http:') && <div className="confirmation">
+          <p>This download is for a test agent on this computer.</p>
+          <p>For a separate endpoint, open this console using the Cryol server’s LAN HTTPS address before downloading.</p>
+        </div>}
         <ol>
           <li>Download and extract the matching setup bundle.
             <div className="row-actions">
@@ -90,8 +95,8 @@ function Enroll({ close }: { close: () => void }) {
               {setup.data.platforms.includes('linux') && <a className="button" href="/api/v1/agents/setup/linux"><Download size={16} /> Linux x64</a>}
             </div>
           </li>
-          <li>Generate a token. On Windows, double-click <strong>Start Cryol Agent.cmd</strong>. On Linux, open a terminal in the extracted folder and run <code>sh start-cryol-agent.sh</code>.</li>
-          <li>Paste the token at the prompt. The first scan starts automatically. Keep the window open for updates.</li>
+          <li>Generate a token. On Windows, double-click <strong>Start Cryol Agent.cmd</strong> and approve the administrator prompt. On Linux, run <code>sh start-cryol-agent.sh</code> in the extracted folder.</li>
+          <li>Paste the token when prompted, then check <strong>Last scan</strong> in Cryol. The Windows agent runs in the background and starts at boot. On Linux, keep the terminal open.</li>
         </ol>
       </> : setup.data && <p>Setup downloads are unavailable at this address. Use your HTTPS console address or the configured local test console.</p>}
       {credential && <>
@@ -154,9 +159,15 @@ function Details({ item, permissions, close }: { item: Agent; permissions: strin
         <dl className="asset-details">
           {Object.entries({ 'Operating system': info.osName || item.osFamily, CPU: info.cpuModel, 'Logical CPUs': info.logicalCpus,
             Memory: info.memoryBytes ? (info.memoryBytes / 2 ** 30).toFixed(1) + ' GiB' : undefined,
-            Manufacturer: info.manufacturer, Model: info.model, Serial: info.serial, 'Software collector': info.softwareStatus }).map(([key,value]) =>
+            Manufacturer: info.manufacturer, Model: info.model, Serial: info.serial, 'Firmware vendor': info.firmwareVendor, 'Firmware version': info.firmwareVersion, 'Software collector': info.softwareStatus }).map(([key,value]) =>
               <div key={key}><dt>{key}</dt><dd>{value || 'Unknown'}</dd></div>)}
         </dl>
+        {!!info.volumes?.length && <>
+          <h3>Fixed drive volumes</h3>
+          <dl className="asset-details">{info.volumes.map((volume) => <div key={volume.mount}>
+            <dt>{volume.mount}</dt><dd>{(volume.freeBytes / 2 ** 30).toFixed(1)} GiB free of {(volume.capacityBytes / 2 ** 30).toFixed(1)} GiB</dd>
+          </div>)}</dl>
+        </>}
         <h3>Network adapters</h3>
         {info.network?.length ? <dl className="asset-details">{info.network.map((adapter) =>
           <div key={adapter.name}><dt>{adapter.name}</dt><dd>{adapter.up ? 'Up' : 'Down'}{adapter.mac && ' · ' + adapter.mac}{adapter.addresses?.length ? <><br />{adapter.addresses.join(', ')}</> : null}</dd></div>)}</dl> : <p>No network adapters reported.</p>}
