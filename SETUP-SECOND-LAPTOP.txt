@@ -93,37 +93,35 @@ OPTION B — GITHUB CLONE AND NATIVE POSTGRESQL
 
        psql -h 127.0.0.1 -p 5432 -U cryol -d cryol -W -c "select current_user, current_database();"
 
-   The result should show cryol in both columns. Copy the environment
-   template in the repository root:
+   The result should show cryol in both columns. If you are moving an existing
+   installation, use the wizard with --restore as described below.
 
-       (umask 077; cp .env.example .env)
-
-   Edit .env and set the following values. Replace the password placeholder.
-   Percent-encode reserved characters in the password for use in a URL.
-
-       CRYOL_DATABASE_URL='postgres://cryol:REPLACE_WITH_LOCAL_DB_PASSWORD@127.0.0.1:5432/cryol?sslmode=disable'
-       CRYOL_HTTP_ADDR=127.0.0.1:8080
-
-   The PostgreSQL password is separate from the password you use to sign
-   in to Cryol. Keep .env private. Use sslmode=disable only for a database
-   on the same laptop. Leave optional agent and TLS settings empty for
-   this local-only setup.
-
-4. Install frontend dependencies, apply migrations, check the schema, and
-   create the first Cryol administrator:
+4. Run the Cryol database setup wizard from the repository root:
 
        corepack pnpm install --frozen-lockfile
+       cd apps/server
+       go run ./cmd/cryol-cli setup --write-env ../../.env
+       cd ../..
+
+   When asked for the database connection URL, enter the following using the
+   password you chose for the PostgreSQL cryol role:
+
+       postgres://cryol:REPLACE_WITH_LOCAL_DB_PASSWORD@127.0.0.1:5432/cryol?sslmode=disable
+
+   The URL is entered without echoing. Percent-encode reserved characters in
+   the password. Use sslmode=disable only for a database on the same laptop.
+   The wizard checks the database, asks for confirmation when migrations are
+   needed, and prompts for an administrator on first setup. Choose a Cryol
+   admin password of at least 15 characters. Existing accounts are retained.
+   If you already have .env, load it first and run setup without --write-env.
+
+   From the repository root, load the environment and start the server:
+
        set -a
        . ./.env
        set +a
        cd apps/server
-       go run ./cmd/cryol-cli migrate
-       go run ./cmd/cryol-cli schema-check
-       go run ./cmd/cryol-cli bootstrap-admin admin
        go run ./cmd/cryol-server
-
-   Choose a Cryol admin password of at least 15 characters. Bootstrap is
-   for an empty Cryol installation. Skip it when using a restored database.
 
 5. Open a second terminal at the repository root and start the frontend:
 
@@ -158,9 +156,30 @@ from these environment values.
 
 A Git clone transfers code only. A new database starts empty and requires
 bootstrap-admin. To move existing users, assets and agents, transfer a
-PostgreSQL backup privately, restore it into a new empty destination
-database, then apply Cryol migrations. Skip bootstrap for a restored
-database. Keep the original installation and its backup until you
+PostgreSQL backup privately and use the wizard with --restore on a new
+empty destination database. The wizard retains the restored accounts. Keep the original installation and its backup until you
 verify the new one. LAN agent enrollment also needs a reachable HTTPS
 address, a matching certificate and any installer binaries configured
 through the agent environment values.
+
+MOVE AN EXISTING DATABASE
+
+Create a custom-format backup on the old computer using its actual host,
+port, role and database name. Run this when writes have stopped if you
+want the copy to include all changes up to the move.
+
+    pg_dump -h OLD_HOST -p OLD_PORT -U OLD_ROLE -d OLD_DATABASE -W -Fc -f /path/to/private/cryol-backup.dump
+
+Transfer the file privately. On the second laptop, create the empty cryol
+database and role as above. Install pg_restore from a compatible PostgreSQL
+toolset and add it to PATH. From the repository root, run:
+
+    cd apps/server
+    go run ./cmd/cryol-cli setup --write-env ../../.env --restore "/path/to/private/cryol-backup.dump"
+    cd ../..
+
+Enter the destination database connection URL and type RESTORE when prompted.
+The wizard checks for Cryol tables in the archive, restores in a single
+transaction, and checks the destination installation. It asks before applying
+pending migrations and retains the restored accounts. Use a trusted Cryol
+archive. Test sign-in and verify the expected data before retiring the source.

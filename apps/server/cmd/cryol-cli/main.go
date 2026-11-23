@@ -28,8 +28,11 @@ func main() {
 }
 
 func run(ctx context.Context, args []string) error {
+	if len(args) > 0 && args[0] == "setup" {
+		return runSetup(ctx, args[1:])
+	}
 	if !(len(args) == 1 && (args[0] == "migrate" || args[0] == "schema-check")) && !(len(args) == 2 && args[0] == "bootstrap-admin") {
-		return errors.New("usage: cryol-cli migrate | schema-check | bootstrap-admin USERNAME")
+		return errors.New("usage: cryol-cli setup [--write-env PATH] [--restore BACKUP] | migrate | schema-check | bootstrap-admin USERNAME")
 	}
 	cfg, err := config.Load()
 	if err != nil {
@@ -51,26 +54,36 @@ func run(ctx context.Context, args []string) error {
 	if args[0] != "bootstrap-admin" {
 		return nil
 	}
+	password, err := readAdminPassword()
+	if err != nil {
+		return err
+	}
+	defer clear(password)
+	return auth.Bootstrap(ctx, pool, args[1], password)
+}
+
+func readAdminPassword() ([]byte, error) {
 	in := int(os.Stdin.Fd())
 	if !term.IsTerminal(in) {
-		return errors.New("administrator bootstrap requires an interactive terminal")
+		return nil, errors.New("administrator bootstrap requires an interactive terminal")
 	}
 	fmt.Fprint(os.Stderr, "Administrator password: ")
 	password, err := term.ReadPassword(in)
 	fmt.Fprintln(os.Stderr)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	defer clear(password)
 	fmt.Fprint(os.Stderr, "Confirm password: ")
 	confirmation, err := term.ReadPassword(in)
 	fmt.Fprintln(os.Stderr)
 	defer clear(confirmation)
 	if err != nil {
-		return err
+		clear(password)
+		return nil, err
 	}
 	if !bytes.Equal(password, confirmation) {
-		return errors.New("passwords differ")
+		clear(password)
+		return nil, errors.New("passwords differ")
 	}
-	return auth.Bootstrap(ctx, pool, args[1], password)
+	return password, nil
 }
