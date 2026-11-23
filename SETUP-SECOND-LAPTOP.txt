@@ -50,43 +50,101 @@ To update after pulling new code, take a database backup first. Then run:
     docker compose run --rm app cryol-cli migrate
     docker compose up -d --wait
 
-OPTION B — NATIVE DEVELOPMENT FROM GITHUB
+OPTION B — GITHUB CLONE AND NATIVE POSTGRESQL
 
-Install Go 1.26.4, Node.js 22.12 or later with Corepack, and PostgreSQL 17.
-Provision a separate local database and role. These commands use a local
-PostgreSQL administrator named postgres. Adjust the administrator name if
-your installation uses another account.
+1. Install Git, Go 1.26.4 or a compatible newer Go toolchain, Node.js 22.12
+   or later with Corepack, and PostgreSQL 17 with command-line tools.
 
-    createuser -h 127.0.0.1 -U postgres -P cryol
-    createdb -h 127.0.0.1 -U postgres -O cryol cryol
-    cp .env.example .env
+   PostgreSQL installers: https://www.postgresql.org/download/
+   Windows: Complete the PostgreSQL installer, record the password for the
+   postgres administrator, and start the PostgreSQL service. Add the PostgreSQL
+   bin directory to PATH if psql is unavailable in a new Git Bash window.
+   macOS and Linux: Start the PostgreSQL service using your installation's
+   service manager. Use the administrator role created by your installation.
 
-Edit .env and use the password you assigned to the local PostgreSQL role.
-For example, with a URL-safe password and PostgreSQL's default port:
+   Verify the tools and server:
 
-    CRYOL_DATABASE_URL=postgres://cryol:REPLACE_WITH_LOCAL_DB_PASSWORD@127.0.0.1:5432/cryol?sslmode=disable
-    CRYOL_HTTP_ADDR=127.0.0.1:8080
+       git --version
+       go version
+       node --version
+       corepack --version
+       psql --version
+       pg_isready -h 127.0.0.1 -p 5432
 
-Percent-encode reserved characters in the database password for a URL.
-The database password is separate from the Cryol administrator password.
+2. Clone the repository using the Git commands at the top of this guide.
+   From the repository root, open PostgreSQL as an administrator:
 
-    corepack pnpm install --frozen-lockfile
-    set -a
-    . ./.env
-    set +a
-    cd apps/server
-    go run ./cmd/cryol-cli migrate
-    go run ./cmd/cryol-cli bootstrap-admin admin
-    go run ./cmd/cryol-server
+       psql -h 127.0.0.1 -p 5432 -U postgres -d postgres
 
-In a second terminal opened at the repository root:
+   Replace postgres after -U if your administrator uses another name.
+   On Linux installations that use peer authentication for administration,
+   open psql with sudo -u postgres psql -d postgres instead. In psql, run:
 
-    corepack pnpm --filter @cryol/web dev
+       CREATE ROLE cryol LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE;
+       \password cryol
+       CREATE DATABASE cryol OWNER cryol;
+       \q
 
-Open http://localhost:5173. For an all-in-one native console, first run
-corepack pnpm build at the root and set CRYOL_WEB_DIR in .env to the
-absolute path to apps/web/dist. Start the Go server and open
-http://127.0.0.1:8080.
+   At the password prompt, choose a new PostgreSQL password for the cryol
+   role. Save it privately. If either the role or database already exists,
+   verify its owner and intended use before selecting it for this setup.
+
+3. Test the same TCP login Cryol will use:
+
+       psql -h 127.0.0.1 -p 5432 -U cryol -d cryol -W -c "select current_user, current_database();"
+
+   The result should show cryol in both columns. Copy the environment
+   template in the repository root:
+
+       (umask 077; cp .env.example .env)
+
+   Edit .env and set the following values. Replace the password placeholder.
+   Percent-encode reserved characters in the password for use in a URL.
+
+       CRYOL_DATABASE_URL='postgres://cryol:REPLACE_WITH_LOCAL_DB_PASSWORD@127.0.0.1:5432/cryol?sslmode=disable'
+       CRYOL_HTTP_ADDR=127.0.0.1:8080
+
+   The PostgreSQL password is separate from the password you use to sign
+   in to Cryol. Keep .env private. Use sslmode=disable only for a database
+   on the same laptop. Leave optional agent and TLS settings empty for
+   this local-only setup.
+
+4. Install frontend dependencies, apply migrations, check the schema, and
+   create the first Cryol administrator:
+
+       corepack pnpm install --frozen-lockfile
+       set -a
+       . ./.env
+       set +a
+       cd apps/server
+       go run ./cmd/cryol-cli migrate
+       go run ./cmd/cryol-cli schema-check
+       go run ./cmd/cryol-cli bootstrap-admin admin
+       go run ./cmd/cryol-server
+
+   Choose a Cryol admin password of at least 15 characters. Bootstrap is
+   for an empty Cryol installation. Skip it when using a restored database.
+
+5. Open a second terminal at the repository root and start the frontend:
+
+       corepack pnpm --filter @cryol/web dev
+
+   Open http://localhost:5173 and sign in as admin. Verify the backend:
+
+       curl http://127.0.0.1:8080/api/v1/system/readiness
+
+   The readiness endpoint should return {"status":"ready"}. If psql reports
+   a connection refusal, check the PostgreSQL service and port. If psql
+   rejects the password, resolve the role login before running migrations.
+
+   For an all-in-one native console, run corepack pnpm build at the root and
+   set CRYOL_WEB_DIR in .env to the absolute path to apps/web/dist. You can
+   use forward slashes in Windows paths. Reload .env from the project root,
+   start the Go server, and open http://127.0.0.1:8080.
+
+PostgreSQL references:
+https://www.postgresql.org/docs/17/app-psql.html
+https://www.postgresql.org/docs/17/sql-createrole.html
 
 ENVIRONMENT FILES AND EXISTING DATA
 
