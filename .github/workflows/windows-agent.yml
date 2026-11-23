@@ -18,6 +18,20 @@ permissions:
   contents: read
 
 jobs:
+  test:
+    name: Test agent on Windows
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: apps/server
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: apps/server/go.mod
+          cache-dependency-path: apps/server/go.sum
+      - run: go test -v ./cmd/cryol-agent
+
   build:
     name: Build unsigned Windows x64 test installer
     runs-on: ubuntu-latest

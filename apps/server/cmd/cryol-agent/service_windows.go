@@ -257,14 +257,14 @@ func installService(ctx context.Context, log *slog.Logger, args []string) (resul
 		return err
 	}
 	createdSource, err := ensureServiceEventSource()
-	if err != nil {
-		return fmt.Errorf("register Windows event log source: %w", err)
-	}
 	defer func() {
 		if !retain && createdSource {
 			_ = eventlog.Remove(serviceName)
 		}
 	}()
+	if err != nil {
+		return fmt.Errorf("register Windows event log source: %w", err)
+	}
 	enrollArgs := append([]string{"enroll"}, runArgs...)
 	if *showToken {
 		enrollArgs = append(enrollArgs, "-show-token")
@@ -314,20 +314,25 @@ func archivePreviousInstall(root string, allowed bool) (string, error) {
 }
 
 func ensureServiceEventSource() (bool, error) {
-	const path = `SYSTEM\CurrentControlSet\Services\EventLog\Application\CryolAgent`
-	key, err := registry.OpenKey(registry.LOCAL_MACHINE, path, registry.QUERY_VALUE)
-	if errors.Is(err, windows.ERROR_FILE_NOT_FOUND) {
-		return true, eventlog.InstallAsEventCreate(serviceName, eventlog.Error|eventlog.Warning|eventlog.Info)
-	}
+	const applicationLog = `SYSTEM\CurrentControlSet\Services\EventLog\Application`
+	return configureEventSource(registry.LOCAL_MACHINE, applicationLog+`\`+serviceName)
+}
+
+func configureEventSource(root registry.Key, path string) (bool, error) {
+	key, existed, err := registry.CreateKey(root, path, registry.SET_VALUE)
 	if err != nil {
 		return false, err
 	}
 	defer key.Close()
-	messageFile, _, err := key.GetStringValue("EventMessageFile")
-	if err != nil || !strings.EqualFold(messageFile, `%SystemRoot%\System32\EventCreate.exe`) {
-		return false, errors.New("an unexpected CryolAgent Event Viewer configuration exists")
+	// Setup owns this source. Rewrite the standard values to repair older
+	// registrations and interrupted installs while preserving other values.
+	if err := key.SetExpandStringValue("EventMessageFile", `%SystemRoot%\System32\EventCreate.exe`); err != nil {
+		return !existed, err
 	}
-	return false, nil
+	if err := key.SetDWordValue("TypesSupported", eventlog.Error|eventlog.Warning|eventlog.Info); err != nil {
+		return !existed, err
+	}
+	return !existed, key.SetDWordValue("CustomSource", 1)
 }
 
 func configureServiceStartup(service *mgr.Service) error {

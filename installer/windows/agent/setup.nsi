@@ -15,10 +15,10 @@ SetCompressor /SOLID lzma
   !define OUTPUT_EXE "Cryol-Agent-Setup-x64.exe"
 !endif
 !ifndef PRODUCT_VERSION
-  !define PRODUCT_VERSION "0.3.2"
+  !define PRODUCT_VERSION "0.3.3"
 !endif
 !ifndef FILE_VERSION
-  !define FILE_VERSION "0.3.2.0"
+  !define FILE_VERSION "0.3.3.0"
 !endif
 !ifndef DEFAULT_SERVER
   !define DEFAULT_SERVER ""

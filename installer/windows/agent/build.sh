@@ -9,7 +9,7 @@ compiler=${MAKENSIS:-makensis}
 
 (
   cd "$root/apps/server"
-  GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "-X main.version=0.3.2" -o "$out/cryol-agent.exe" ./cmd/cryol-agent
+  GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "-X main.version=0.3.3" -o "$out/cryol-agent.exe" ./cmd/cryol-agent
 )
 
 # For release signing, sign the agent first and invoke makensis separately.
