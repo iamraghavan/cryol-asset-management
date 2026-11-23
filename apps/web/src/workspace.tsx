@@ -1,20 +1,19 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { lazy, Suspense, useState } from 'react'
+import { Activity, Boxes, Eye, EyeOff, LoaderCircle } from 'lucide-react'
+import { useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { Link, useNavigate } from 'react-router'
 import { RequestError, request } from './lib/api'
 import { ConsoleShell } from './components/console-shell'
 import { dashboardKey } from './lib/inventory'
+import { Assets } from './asset-registry'
+import { Agents } from './agent-console'
 
 type User = { username: string; permissions: string[] }
 type Profile = {
   name: string; address: string; contact: string; timezone: string
   currency: string; financialYearMonth: number; assetPrefix: string
 }
-
-const Assets = lazy(() => import('./asset-registry').then(({ Assets }) => ({ default: Assets })))
-
-const Agents = lazy(() => import('./agent-console').then(({ Agents }) => ({ default: Agents })))
 
 const accountKey = ['account']
 const profileKey = ['organization-profile']
@@ -50,10 +49,10 @@ export function Workspace({ page = "organization" }: { page?: "dashboard" | "ass
         {logout.isError && <p role="alert">{logout.error.message}</p>}
         {page === 'dashboard' && <Dashboard user={account.data} />}
         {page === 'assets' && (permissions.includes('assets.read')
-          ? <Suspense fallback={<p role="status">Loading asset registry…</p>}><Assets permissions={permissions} /></Suspense>
+          ? <Assets permissions={permissions} />
           : <p>You do not have permission to view assets.</p>)}
         {page === 'agents' && (permissions.includes('agents.read')
-          ? <Suspense fallback={<p role="status">Loading agents…</p>}><Agents permissions={permissions} /></Suspense>
+          ? <Agents permissions={permissions} />
           : <p>You do not have permission to view agents.</p>)}
         {page === 'organization' && (permissions.includes('settings.read')
           ? <Organization canEdit={permissions.includes('settings.manage')} />
@@ -62,15 +61,17 @@ export function Workspace({ page = "organization" }: { page?: "dashboard" | "ass
     )
   }
   return (
-    <>
-      <header className="brand">Cryol Asset Management</header>
-      <main>
-        {account.isPending && <p role="status">Checking your session…</p>}
-        {account.isError && <><p role="alert">{account.error.message}</p><button onClick={() => void account.refetch()}>Retry</button></>}
-        {account.data === null && <Login />}
-        <p><Link to="/system">System status</Link></p>
-      </main>
-    </>
+    <main className="auth-page">
+      <div className="auth-layout">
+        <section className="auth-card" aria-label="Cryol account access">
+          <div className="auth-brand"><span className="brand-icon"><Boxes size={20} aria-hidden="true" /></span>Cryol Asset Management</div>
+          {account.isPending && <p className="auth-status" role="status">Checking your session…</p>}
+          {account.isError && <><p className="auth-error" role="alert">{account.error.message}</p><button onClick={() => void account.refetch()}>Retry</button></>}
+          {account.data === null && <Login />}
+        </section>
+        <Link className="auth-system-link" to="/system"><Activity size={15} aria-hidden="true" /> System status</Link>
+      </div>
+    </main>
   )
 }
 
@@ -78,6 +79,8 @@ function Login() {
   const client = useQueryClient()
   const [pending, setPending] = useState(false)
   const [message, setMessage] = useState('')
+  const [showPassword, setShowPassword] = useState(false)
+  const passwordField = useRef<HTMLInputElement>(null)
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (pending) return
@@ -85,24 +88,39 @@ function Login() {
     setMessage('')
     const form = event.currentTarget
     const data = new FormData(form)
-    form.reset()
     try {
       await request('/auth/login', 'POST', { username: String(data.get('username')), password: String(data.get('password')) })
       await client.invalidateQueries({ queryKey: accountKey })
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Sign-in failed.')
+      if (passwordField.current) passwordField.current.value = ''
+      setShowPassword(false)
     } finally {
       setPending(false)
     }
   }
   return (
     <>
-      <h1>Sign in</h1>
-      <form className="record-form login-form" onSubmit={submit}>
-        <label>Username<input name="username" autoComplete="username" required maxLength={64} /></label>
-        <label>Password<input name="password" type="password" autoComplete="current-password" required maxLength={1024} /></label>
-        {message && <p role="alert">{message}</p>}
-        <button type="submit" disabled={pending}>{pending ? 'Signing in…' : 'Sign in'}</button>
+      <h1 className="auth-title">Sign in</h1>
+      <form className="login-form" onSubmit={submit}>
+        <div className="auth-field">
+          <label htmlFor="cryol-username">Username</label>
+          <input id="cryol-username" name="username" autoComplete="username" autoCapitalize="none" spellCheck={false} required maxLength={64} readOnly={pending} />
+        </div>
+        <div className="auth-field">
+          <label htmlFor="cryol-password">Password</label>
+          <div className="auth-password">
+            <input id="cryol-password" ref={passwordField} name="password" type={showPassword ? 'text' : 'password'} autoComplete="current-password" required maxLength={1024} readOnly={pending} />
+            <button className="icon-button" type="button" disabled={pending} onClick={() => setShowPassword(!showPassword)} aria-label={showPassword ? 'Hide password' : 'Show password'} aria-controls="cryol-password">
+              {showPassword ? <EyeOff size={18} aria-hidden="true" /> : <Eye size={18} aria-hidden="true" />}
+            </button>
+          </div>
+        </div>
+        {message && <p className="auth-error" role="alert">{message}</p>}
+        <button className="button-primary auth-submit" type="submit" disabled={pending}>
+          {pending && <LoaderCircle className="auth-spinner" size={16} aria-hidden="true" />}
+          {pending ? 'Signing in…' : 'Sign in'}
+        </button>
       </form>
     </>
   )

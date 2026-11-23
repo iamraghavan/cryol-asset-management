@@ -169,14 +169,31 @@ func testAgentInventory(t *testing.T, handler http.Handler, console func(string,
 	send(true, "enroll", enrollment.Token, map[string]string{"installationId": inventory.NewID()}, 401)
 	send(true, "heartbeat", agent.Credential, nil, 200)
 	snapshot := inventory.Snapshot{Version: 1, RunID: inventory.NewID(), ScannedAt: time.Now().UTC().Add(-time.Minute), AgentVersion: "test",
-		Hostname: "endpoint-one", OSFamily: "linux", Architecture: "amd64", LogicalCPUs: 4, SoftwareStatus: "complete",
+		Hostname: "endpoint-one", OSFamily: "linux", OSName: "Test Linux", Serial: "SERIAL-123", Architecture: "amd64", LogicalCPUs: 4, SoftwareStatus: "complete",
 		Software: []inventory.Software{{ID: "cryol-test", Name: "Cryol test package", Source: "dpkg"}}}
 	send(true, "inventory", agent.Credential, snapshot, 200)
 	send(true, "inventory", agent.Credential, snapshot, 200)
+	firstRun := snapshot.RunID
 	snapshot.Hostname = "different"
 	send(true, "inventory", agent.Credential, snapshot, 409)
 	snapshot.RunID, snapshot.ScannedAt, snapshot.SoftwareStatus, snapshot.Software = inventory.NewID(), time.Now().UTC(), "unavailable", nil
 	send(true, "inventory", agent.Credential, snapshot, 200)
+	var history struct {
+		Items []struct {
+			RunID, SoftwareStatus string
+			ScannedAt, ReceivedAt time.Time
+		}
+		HasNext bool
+	}
+	path := "/agents/" + id + "/inventory-history"
+	if err := json.Unmarshal(console("GET", path, "", "", 200).Body.Bytes(), &history); err != nil || len(history.Items) != 2 || history.HasNext {
+		t.Fatalf("unexpected inventory history: %+v (%v)", history, err)
+	}
+	if latest := history.Items[0]; latest.RunID != snapshot.RunID || latest.SoftwareStatus != "unavailable" || latest.ReceivedAt.IsZero() || latest.ScannedAt.IsZero() || history.Items[1].RunID != firstRun {
+		t.Fatalf("unexpected history order or scan metadata: %+v", history)
+	}
+	console("GET", path+"?page=0", "", "", 400)
+	console("GET", "/agents/"+inventory.NewID()+"/inventory-history", "", "", 404)
 	hardware := console("GET", "/agents/"+id+"/inventory?part=hardware", "", "", 200).Body.String()
 	if strings.Contains(hardware, "cryol-test") || !strings.Contains(hardware, "different") {
 		t.Fatalf("unexpected hardware report: %s", hardware)
@@ -186,8 +203,18 @@ func testAgentInventory(t *testing.T, handler http.Handler, console func(string,
 		t.Fatalf("last complete software missing: %s", software)
 	}
 	console("PUT", "/agents/"+id+"/asset", `{"assetId":"`+assetID+`"}`, "", 200)
-	if list := console("GET", "/agents?page=1", "", "", 200).Body.String(); !strings.Contains(list, assetID) {
-		t.Fatalf("asset link missing: %s", list)
+	var list struct {
+		Items []struct {
+			ID, DeviceID, Hostname, OSName, Serial, Status, AssetID string
+			LastSeen                                                time.Time
+		}
+	}
+	if err := json.Unmarshal(console("GET", "/agents?page=1", "", "", 200).Body.Bytes(), &list); err != nil || len(list.Items) != 1 {
+		t.Fatalf("unexpected agent list: %+v (%v)", list, err)
+	}
+	item := list.Items[0]
+	if item.ID != id || item.DeviceID == "" || item.Hostname != "different" || item.OSName != "Test Linux" || item.Serial != "SERIAL-123" || item.Status != "online" || item.AssetID != assetID || item.LastSeen.IsZero() {
+		t.Fatalf("unexpected agent table row: %+v", item)
 	}
 	console("PUT", "/agents/"+id+"/asset", `{"assetId":null}`, "", 200)
 	console("POST", "/agents/"+id+"/revoke", "", "", 200)

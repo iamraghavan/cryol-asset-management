@@ -56,7 +56,30 @@ dd { margin: 0; }
 .status, .record-form { padding: 16px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }
 .status { display: flex; flex-wrap: wrap; gap: 8px 24px; max-width: 620px; }
 .record-form { max-width: 520px; }
-.login-form { max-width: 340px; }
+.auth-page { display: grid; place-items: center; min-height: 100dvh; padding: var(--space-5) var(--space-4); }
+.auth-layout { width: min(100%, 416px); }
+.auth-card {
+  padding: clamp(20px, 6vw, 32px); background: var(--surface); border: 1px solid var(--border);
+  border-radius: 10px; box-shadow: 0 2px 12px rgb(20 33 54 / 5%);
+}
+.auth-brand { display: flex; align-items: center; gap: 10px; margin-bottom: var(--space-5); font-weight: 600; }
+.auth-brand .brand-icon { color: white; background: var(--primary); }
+.auth-title { margin-bottom: var(--space-4); }
+.login-form, .auth-field { display: grid; }
+.login-form { gap: var(--space-4); }
+.auth-field { gap: var(--space-2); }
+.auth-field input, .auth-submit { min-height: 44px; }
+.auth-password { position: relative; }
+.auth-password input { padding-inline-end: 48px; }
+.auth-password button { position: absolute; inset-block: 4px; inset-inline-end: 4px; min-width: 36px; color: var(--muted); }
+.auth-error { margin: 0 0 var(--space-3); color: var(--danger); }
+.login-form .auth-error, .auth-status { margin: 0; }
+.auth-system-link { display: flex; align-items: center; justify-content: center; gap: 7px; min-height: 44px; color: var(--muted); text-decoration: none; }
+.auth-system-link:hover { color: var(--primary); text-decoration: underline; }
+@media (prefers-reduced-motion: no-preference) {
+  .auth-spinner { animation: auth-spin 1s linear infinite; }
+  @keyframes auth-spin { to { transform: rotate(360deg); } }
+}
 .record-form label { display: grid; gap: 6px; margin-bottom: 12px; }
 .record-form button[type=submit] { background: var(--primary); color: white; }
 
@@ -112,6 +135,7 @@ kbd { margin-left: auto; padding: 1px 4px; font: inherit; font-size: 11px; borde
 .badge { display: inline-block; padding: 2px 7px; font-weight: 600; }
 .badge-muted { color: #4c5566; background: #edf0f5; }
 .asset-table-wrap { overflow-x: auto; }
+.agent-table-id { display: block; max-width: 15ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .asset-table { width: 100%; border-collapse: collapse; white-space: nowrap; }
 .asset-table th, .asset-table td { padding: 8px 12px; text-align: left; border-bottom: 1px solid var(--border); }
 .asset-table th { font-size: 12px; color: var(--muted); background: #f6f8fc; font-weight: 600; }
@@ -122,6 +146,10 @@ kbd { margin-left: auto; padding: 1px 4px; font: inherit; font-size: 11px; borde
 
 .overlay { position: fixed; z-index: 20; inset: 0; background: rgb(20 31 48 / 48%); }
 .drawer { position: fixed; z-index: 21; top: 0; bottom: 0; right: 0; width: min(100%, 560px); display: flex; flex-direction: column; background: var(--surface); box-shadow: var(--shadow); }
+.drawer-wide { width: 75%; }
+@media (max-width: 767px) {
+  .drawer-wide { width: 100%; }
+}
 .drawer-header, .drawer-footer, .search-palette header { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; padding: 14px 18px; }
 .drawer-header { border-bottom: 1px solid var(--border); }
 .drawer-header h2, .search-palette h2 { margin: 0 0 3px; color: #202938; overflow-wrap: anywhere; }
@@ -173,8 +201,7 @@ kbd { margin-left: auto; padding: 1px 4px; font: inherit; font-size: 11px; borde
 input[type=checkbox] { width: 16px; height: 16px; margin: 0; accent-color: var(--primary); }
 .selection-toolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; padding: 8px 12px; background: #f1f6ff; }
 
-.agent-downloads { padding: var(--space-4); margin-bottom: var(--space-4); }
-.agent-download-grid { display: grid; gap: var(--space-4); grid-template-columns: repeat(auto-fit, minmax(min(100%, 250px), 1fr)); }
+.agent-download-grid { display: grid; gap: var(--space-4); grid-template-columns: minmax(0, 1fr); }
 .agent-download-grid > section { padding: var(--space-3); border: 1px solid var(--border); border-radius: var(--radius); }
 .agent-download-grid .row-actions { flex-wrap: wrap; margin-bottom: var(--space-2); }
 .agent-download-grid ol { padding-left: 20px; margin-bottom: 0; }

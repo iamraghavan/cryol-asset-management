@@ -1,0 +1,108 @@
+CRYOL ASSET MANAGEMENT — SECOND LAPTOP SETUP
+
+GitHub repository
+https://github.com/iamraghavan/cryol-asset-management
+
+Install Git and sign in with a GitHub account that can access the repository.
+With GitHub CLI, run gh auth login and gh auth setup-git before cloning.
+On Windows, use Git Bash for the shell commands below.
+
+    git clone https://github.com/iamraghavan/cryol-asset-management.git
+    cd cryol-asset-management
+
+OPTION A — DOCKER COMPOSE
+
+Install Docker Desktop on Windows or macOS, or Docker Engine and the
+Compose plugin on Linux. Start Docker and verify docker compose version.
+Official instructions: https://docs.docker.com/compose/install/
+
+Use a new database password for this laptop. The example below generates
+a URL-safe 64-character hexadecimal password. Run it once in a fresh clone.
+
+    (umask 077; printf 'CRYOL_POSTGRES_PASSWORD=%s\nCRYOL_HTTPS_PORT=8443\n' "$(openssl rand -hex 32)" > .env)
+    docker compose build
+    docker compose run --rm app cryol-dev-certificate
+    docker compose run --rm app cryol-cli migrate
+    docker compose run --rm app cryol-cli bootstrap-admin admin
+    docker compose up -d --wait
+
+Choose an administrator password of at least 15 characters when prompted.
+Use https://localhost:8443. Setup generates a self-signed TLS certificate
+for this laptop. To inspect or import the public certificate through your
+browser or operating system's local trust settings, export it with:
+
+    docker compose exec -T app cat /var/lib/cryol/tls/server.pem > cryol-local-cert.pem
+    curl --cacert cryol-local-cert.pem https://localhost:8443/api/v1/system/readiness
+
+The Docker configuration publishes Cryol on the laptop itself. PostgreSQL
+uses an internal Docker network. Cryol data remains in the postgres named
+volume. To stop and resume without removing data:
+
+    docker compose down
+    docker compose up -d --wait
+
+To update after pulling new code, take a database backup first. Then run:
+
+    docker compose exec -T db pg_dump -U cryol -d cryol -Fc > /path/to/private/cryol-backup.dump
+    git pull --ff-only
+    docker compose stop app
+    docker compose build
+    docker compose run --rm app cryol-cli migrate
+    docker compose up -d --wait
+
+OPTION B — NATIVE DEVELOPMENT FROM GITHUB
+
+Install Go 1.26.4, Node.js 22.12 or later with Corepack, and PostgreSQL 17.
+Provision a separate local database and role. These commands use a local
+PostgreSQL administrator named postgres. Adjust the administrator name if
+your installation uses another account.
+
+    createuser -h 127.0.0.1 -U postgres -P cryol
+    createdb -h 127.0.0.1 -U postgres -O cryol cryol
+    cp .env.example .env
+
+Edit .env and use the password you assigned to the local PostgreSQL role.
+For example, with a URL-safe password and PostgreSQL's default port:
+
+    CRYOL_DATABASE_URL=postgres://cryol:REPLACE_WITH_LOCAL_DB_PASSWORD@127.0.0.1:5432/cryol?sslmode=disable
+    CRYOL_HTTP_ADDR=127.0.0.1:8080
+
+Percent-encode reserved characters in the database password for a URL.
+The database password is separate from the Cryol administrator password.
+
+    corepack pnpm install --frozen-lockfile
+    set -a
+    . ./.env
+    set +a
+    cd apps/server
+    go run ./cmd/cryol-cli migrate
+    go run ./cmd/cryol-cli bootstrap-admin admin
+    go run ./cmd/cryol-server
+
+In a second terminal opened at the repository root:
+
+    corepack pnpm --filter @cryol/web dev
+
+Open http://localhost:5173. For an all-in-one native console, first run
+corepack pnpm build at the root and set CRYOL_WEB_DIR in .env to the
+absolute path to apps/web/dist. Start the Go server and open
+http://127.0.0.1:8080.
+
+ENVIRONMENT FILES AND EXISTING DATA
+
+.env.example is the Git-tracked native template.
+.env.docker.example lists Docker variables and example defaults.
+.env is private and ignored by Git. Keep one .env configuration per clone.
+CRYOL-ENV.local.txt contains original values on the source laptop and is
+also ignored. Its paths and LAN address are specific to that laptop.
+The TLS private-key contents and the Cryol admin password are separate
+from these environment values.
+
+A Git clone transfers code only. A new database starts empty and requires
+bootstrap-admin. To move existing users, assets and agents, transfer a
+PostgreSQL backup privately, restore it into a new empty destination
+database, then apply Cryol migrations. Skip bootstrap for a restored
+database. Keep the original installation and its backup until you
+verify the new one. LAN agent enrollment also needs a reachable HTTPS
+address, a matching certificate and any installer binaries configured
+through the agent environment values.

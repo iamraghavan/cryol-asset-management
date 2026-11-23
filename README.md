@@ -2,6 +2,10 @@
 
 Cryol is a single-organization, self-hosted asset management application in development. The current build includes local sign-in, organization profile management and a PostgreSQL system-status screen.
 
+## Set up on another computer
+
+Follow the [second-laptop setup guide](SETUP-SECOND-LAPTOP.txt) for Docker Compose and native development commands. Use `.env.docker.example` for Docker and `.env.example` for native development.
+
 ## Local development
 
 Use Go 1.26, Node.js 22.12 or newer, Corepack and a dedicated PostgreSQL 17 development database. Install frontend dependencies with `corepack pnpm install --frozen-lockfile`. Copy `.env.example` to `.env` and configure `CRYOL_DATABASE_URL` with the provisioned database credentials. Use TLS when connecting across an untrusted network.

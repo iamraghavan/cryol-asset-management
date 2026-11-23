@@ -7,9 +7,26 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestConsoleDocumentsAndMissingAssetsAreNotCached(t *testing.T) {
+	web := t.TempDir()
+	if err := os.WriteFile(filepath.Join(web, "index.html"), []byte("<!doctype html><title>Cryol</title>"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	handler := Handler(slog.New(slog.NewTextHandler(io.Discard, nil)), nil, "test", web)
+	for path, status := range map[string]int{"/console/agents": http.StatusOK, "/assets/old-console.js": http.StatusNotFound} {
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
+		if response.Code != status || response.Header().Get("Cache-Control") != "no-store" {
+			t.Errorf("%s returned %d with cache control %q", path, response.Code, response.Header().Get("Cache-Control"))
+		}
+	}
+}
 
 func TestSystemRoutes(t *testing.T) {
 	unavailable := false

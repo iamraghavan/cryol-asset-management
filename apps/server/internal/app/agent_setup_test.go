@@ -153,6 +153,27 @@ func TestDesktopBundleBinaryNames(t *testing.T) {
 			if len(bundle.File) != 2 || bundle.File[0].Name != "start-cryol-agent.sh" || bundle.File[1].Name != "cryol-agent" {
 				t.Fatal("bundle does not match the launcher's expected paths")
 			}
+			for _, file := range bundle.File {
+				if file.Mode().Perm() != 0755 {
+					t.Fatalf("%s has mode %v, want 0755", file.Name, file.Mode())
+				}
+			}
+			launcher, err := bundle.File[0].Open()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer launcher.Close()
+			script, err := io.ReadAll(launcher)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := map[string]string{
+				"linux": "Linux:x86_64", "linux-arm64": "Linux:aarch64",
+				"macos-intel": "Darwin:x86_64", "macos-arm64": "Darwin:arm64",
+			}[platform]
+			if !strings.Contains(string(script), "!= '"+want+"'") {
+				t.Fatalf("launcher is missing the platform check for %s", want)
+			}
 		})
 	}
 }

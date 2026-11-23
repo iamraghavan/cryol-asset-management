@@ -3,15 +3,15 @@ import { X } from 'lucide-react'
 import { useRef } from 'react'
 import type { ReactNode } from 'react'
 
-export function RecordDrawer({ title, description, children, onClose }: {
-  title: string; description: string; children: ReactNode; onClose: () => void
+export function RecordDrawer({ title, description, children, onClose, wide = false }: {
+  title: string; description: string; children: ReactNode; onClose: () => void; wide?: boolean
 }) {
   const previousFocus = useRef(document.activeElement)
   return (
     <Dialog.Root open onOpenChange={(open) => { if (!open) onClose() }}>
       <Dialog.Portal>
         <Dialog.Overlay className="overlay" />
-        <Dialog.Content className="drawer" onCloseAutoFocus={(event) => {
+        <Dialog.Content className={wide ? 'drawer drawer-wide' : 'drawer'} onCloseAutoFocus={(event) => {
           if (previousFocus.current instanceof HTMLElement && previousFocus.current.isConnected) {
             event.preventDefault()
             previousFocus.current.focus()

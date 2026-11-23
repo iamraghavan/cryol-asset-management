@@ -19,6 +19,9 @@ it('signs in, loads the authorized profile, and signs out', async () => {
           : new Response(null, { status: 401 })
       case '/api/v1/auth/login':
         expect(init?.method).toBe('POST')
+        if (JSON.parse(String(init?.body)).password === 'wrong password') {
+          return Response.json({ error: { message: 'Username or password is incorrect.' } }, { status: 401 })
+        }
         authenticated = true
         return Response.json({ status: 'authenticated' })
       case '/api/v1/organization/profile':
@@ -34,6 +37,14 @@ it('signs in, loads the authorized profile, and signs out', async () => {
   render(<QueryClientProvider client={new QueryClient()}><MemoryRouter><Workspace /></MemoryRouter></QueryClientProvider>)
   await screen.findByRole('heading', { name: 'Sign in' })
   fireEvent.change(screen.getByLabelText('Username'), { target: { value: 'operator' } })
+  fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'wrong password' } })
+  fireEvent.click(screen.getByRole('button', { name: 'Show password' }))
+  expect(screen.getByLabelText('Password').getAttribute('type')).toBe('text')
+  fireEvent.click(screen.getByRole('button', { name: 'Sign in' }))
+  expect((await screen.findByRole('alert')).textContent).toBe('Username or password is incorrect.')
+  expect((screen.getByLabelText<HTMLInputElement>('Username')).value).toBe('operator')
+  expect((screen.getByLabelText<HTMLInputElement>('Password')).value).toBe('')
+  expect(screen.getByLabelText('Password').getAttribute('type')).toBe('password')
   fireEvent.change(screen.getByLabelText('Password'), { target: { value: 'temporary password' } })
   fireEvent.click(screen.getByRole('button', { name: 'Sign in' }))
   await screen.findByDisplayValue('Example workshop')

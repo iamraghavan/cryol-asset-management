@@ -50,3 +50,21 @@ jobs:
       - run: corepack pnpm lint
       - run: corepack pnpm test
       - run: corepack pnpm build
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Start Cryol on Docker Compose
+        run: |
+          printf 'CRYOL_POSTGRES_PASSWORD=%s\n' "$(openssl rand -hex 32)" > .env
+          docker compose build
+          docker compose run --rm app cryol-dev-certificate
+          docker compose run --rm app cryol-cli migrate
+          docker compose up -d --wait --wait-timeout 90
+          docker compose exec -T app cat /var/lib/cryol/tls/server.pem > cryol-local-cert.pem
+          curl --fail --cacert cryol-local-cert.pem https://localhost:8443/api/v1/system/readiness
+          curl --fail --cacert cryol-local-cert.pem https://localhost:8443/console/agents
+      - name: Stop test services
+        if: always()
+        run: docker compose down

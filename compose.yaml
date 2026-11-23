@@ -1,0 +1,37 @@
+services:
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_DB: cryol
+      POSTGRES_USER: cryol
+      POSTGRES_PASSWORD: ${CRYOL_POSTGRES_PASSWORD:?Set CRYOL_POSTGRES_PASSWORD in .env}
+    volumes:
+      - postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "cryol", "-d", "cryol"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+  app:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      CRYOL_DATABASE_URL: postgres://cryol:${CRYOL_POSTGRES_PASSWORD}@db:5432/cryol?sslmode=disable
+      CRYOL_HTTP_ADDR: 0.0.0.0:8443
+      CRYOL_WEB_DIR: /opt/cryol/web
+      CRYOL_TLS_CERT: /var/lib/cryol/tls/server.pem
+      CRYOL_TLS_KEY: /var/lib/cryol/tls/server.key
+    ports:
+      - "127.0.0.1:${CRYOL_HTTPS_PORT:-8443}:8443"
+    volumes:
+      - tls:/var/lib/cryol/tls
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "--cacert", "/var/lib/cryol/tls/server.pem", "https://localhost:8443/api/v1/system/readiness"]
+      interval: 5s
+      timeout: 4s
+      retries: 12
+volumes:
+  postgres:
+  tls:

@@ -221,7 +221,9 @@ func serveSetup(w http.ResponseWriter, r *http.Request) {
 	archive := zip.NewWriter(w)
 	defer archive.Close()
 	name, script := setupLauncher(platform, origin)
-	entry, err := archive.Create(name)
+	launcher := &zip.FileHeader{Name: name, Method: zip.Deflate}
+	launcher.SetMode(0755)
+	entry, err := archive.CreateHeader(launcher)
 	if err != nil {
 		return
 	}
@@ -232,7 +234,9 @@ func serveSetup(w http.ResponseWriter, r *http.Request) {
 	if platform == "windows" {
 		binaryName = "cryol-agent.exe"
 	}
-	entry, err = archive.Create(binaryName)
+	binary := &zip.FileHeader{Name: binaryName, Method: zip.Deflate}
+	binary.SetMode(0755)
+	entry, err = archive.CreateHeader(binary)
 	if err != nil {
 		return
 	}
@@ -298,8 +302,17 @@ func setupLauncher(platform, origin string) (string, string) {
 		script := "@echo off\r\nsetlocal DisableDelayedExpansion\r\necho Cryol Endpoint Inventory setup\r\necho Approve the Windows administrator prompt, then paste the enrollment token.\r\nif exist \"%~dp0cryol-ca.pem\" (\r\n  " + main + " -ca \"%~dp0cryol-ca.pem\" -pause\r\n) else (\r\n  " + main + " -pause\r\n)\r\nif errorlevel 1 pause\r\n"
 		return "Start Cryol Agent.cmd", script
 	}
+	expected := map[string]string{
+		"linux": "Linux:x86_64", "linux-arm64": "Linux:aarch64",
+		"macos-intel": "Darwin:x86_64", "macos-arm64": "Darwin:arm64",
+	}[platform]
 	return "start-cryol-agent.sh", `#!/bin/sh
 set -eu
+platform="$(uname -s):$(uname -m)"
+if [ "$platform" != '` + expected + `' ]; then
+  printf 'This bundle requires %s. This endpoint reports %s. Choose the matching download in Cryol.\n' '` + expected + `' "$platform" >&2
+  exit 1
+fi
 cd -- "$(dirname -- "$0")"
 umask 077
 chmod u+x ./cryol-agent

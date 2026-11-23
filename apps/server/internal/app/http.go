@@ -53,6 +53,7 @@ func Handler(log *slog.Logger, check func(context.Context) error, version, webDi
 	}
 	if webDir != "" {
 		serveIndex := func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Cache-Control", "no-store")
 			http.ServeFile(w, r, filepath.Join(webDir, "index.html"))
 		}
 		r.Get("/", serveIndex)
@@ -66,12 +67,14 @@ func Handler(log *slog.Logger, check func(context.Context) error, version, webDi
 		r.Get("/assets/*", func(w http.ResponseWriter, r *http.Request) {
 			name := chi.URLParam(r, "*")
 			if name == "" || name == "." || name == ".." || strings.ContainsAny(name, "/\\:") {
+				w.Header().Set("Cache-Control", "no-store")
 				http.NotFound(w, r)
 				return
 			}
 			path := filepath.Join(webDir, "assets", name)
 			info, err := os.Stat(path)
 			if err != nil || !info.Mode().IsRegular() {
+				w.Header().Set("Cache-Control", "no-store")
 				http.NotFound(w, r)
 				return
 			}

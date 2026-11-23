@@ -11,7 +11,7 @@ test('authenticated asset registration, view, search, editing, archive and resto
   expect((await request.get('/api/v1/assets')).status()).toBe(401)
   await page.goto('/')
   await page.getByLabel('Username').fill(username)
-  await page.getByLabel('Password').fill(password)
+  await page.getByLabel('Password', { exact: true }).fill(password)
   await page.getByRole('button', { name: 'Sign in' }).click()
   await expect(page.getByRole('heading', { name: 'Dashboard' })).toBeVisible()
 

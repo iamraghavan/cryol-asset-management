@@ -51,3 +51,17 @@ Verified on macOS with PostgreSQL 17.9. Go integration tests covered HTTPS enfor
 The Windows console bundle now requests UAC approval, enrolls using a one-use token, and registers Cryol Endpoint Inventory for delayed automatic startup as LocalService. Windows Event Viewer receives agent logs. The Windows collector adds reported BIOS information, physical memory, and fixed-volume capacity and available space. Linux retains its foreground launcher.
 
 Verified Go checks, disposable PostgreSQL integration tests, Windows amd64 cross-build and vet, frontend checks, Playwright, and the live Windows ZIP download. Windows installation, collector execution, reboot behavior and removal remain unverified on a native host.
+
+## Enterprise IT asset management workstreams
+
+| Workstream | Current functionality | Remaining work |
+| --- | --- | --- |
+| Management console | Local sessions, backend role permissions, sidebar, PostgreSQL-backed dashboard, asset CRUD, enrolled devices and per-device software | User and role administration, organizational scoping and cross-device software catalog |
+| Endpoint agent | Windows and Linux collectors, stable enrollment identity, certificate verification, retries and authenticated uploads | Native service and collector acceptance across supported Windows and Linux distributions |
+| Agent management | One-use enrollment, revocation, heartbeat status, endpoint-configured scan interval and paginated history of accepted scans | Separate enrollment approval, centrally managed schedules, on-demand scan requests and failed-scan telemetry |
+| Inventory intelligence | Retained snapshots, replay deduplication, last complete software data and manual linking to a managed asset | Hardware and software change events, duplicate candidate review and reconciliation |
+| Network discovery | Endpoint interface inventory | Administrator-scoped Nmap discovery and read-only SNMP inventory with explicit target controls |
+| Advanced asset management | Registry history and selected-row CSV export | Custody, procurement, maintenance, warranties, software entitlements and full reporting |
+| Installers and deployment | Windows agent setup and repair, desktop bundles and versioned PostgreSQL migrations | Native Windows server and Linux packages, tested backups, restore and upgrades |
+
+Scan history lists only reports accepted by the server. It shows endpoint scan time, server receipt time, agent version, and software collector status for authorized users.

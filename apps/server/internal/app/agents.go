@@ -85,7 +85,7 @@ SELECT id::text,expires_at FROM entry`, digest[:], user.ID).Scan(&id, &expires)
 			if !ok {
 				return
 			}
-			listAgents(w, r, pool, user.Can("assets.read"))
+			listAgents(w, r, pool, user.Can("assets.read"), user.Can("hardware.read"))
 		})
 		r.Get("/api/v1/agents/{id}/inventory", func(w http.ResponseWriter, r *http.Request) {
 			user, ok := authorize(w, r, pool, "agents.read")
@@ -99,6 +99,17 @@ SELECT id::text,expires_at FROM entry`, digest[:], user.ID).Scan(&id, &expires)
 			default:
 				fail(w, r, 403, "INVENTORY_ACCESS_DENIED", "You do not have access to this inventory section.")
 			}
+		})
+		r.Get("/api/v1/agents/{id}/inventory-history", func(w http.ResponseWriter, r *http.Request) {
+			user, ok := authorize(w, r, pool, "agents.read")
+			if !ok {
+				return
+			}
+			if !user.Can("hardware.read") && !user.Can("software.read") {
+				fail(w, r, 403, "INVENTORY_ACCESS_DENIED", "You do not have access to inventory history.")
+				return
+			}
+			readInventoryHistory(w, r, pool, user.Can("software.read"))
 		})
 		r.Put("/api/v1/agents/{id}/asset", func(w http.ResponseWriter, r *http.Request) {
 			user, ok := authorize(w, r, pool, "devices.manage")
@@ -320,27 +331,35 @@ func agentsPage(w http.ResponseWriter, r *http.Request) (int, bool) {
 	return page, true
 }
 
-func listAgents(w http.ResponseWriter, r *http.Request, pool *pgxpool.Pool, seeAssets bool) {
+func listAgents(w http.ResponseWriter, r *http.Request, pool *pgxpool.Pool, seeAssets, seeHardware bool) {
 	page, ok := agentsPage(w, r)
 	if !ok {
 		return
 	}
 	rows, err := pool.Query(r.Context(), `SELECT a.id::text,d.id::text,d.hostname,d.os_family,d.architecture,a.version,a.last_seen,a.last_inventory_at,coalesce(d.asset_id::text,''),coalesce(asset.asset_number,''),
+coalesce(latest.os_name,''),coalesce(latest.serial,''),
 CASE WHEN a.revoked_at IS NOT NULL THEN 'revoked' WHEN a.last_seen>now()-interval '15 minutes' THEN 'online' ELSE 'offline' END
-FROM endpoint_agent a JOIN inventory_device d ON d.id=a.device_id LEFT JOIN asset ON asset.id=d.asset_id ORDER BY a.last_seen DESC,a.id LIMIT 51 OFFSET $1`, (page-1)*50)
+FROM (SELECT id,device_id,version,last_seen,last_inventory_at,revoked_at FROM endpoint_agent ORDER BY last_seen DESC,id LIMIT 51 OFFSET $1) a
+JOIN inventory_device d ON d.id=a.device_id LEFT JOIN asset ON asset.id=d.asset_id
+LEFT JOIN LATERAL (
+  SELECT payload->>'osName' AS os_name, payload->>'serial' AS serial
+  FROM inventory_snapshot WHERE $2::boolean AND agent_id=a.id
+  ORDER BY scanned_at DESC, received_at DESC, run_id DESC LIMIT 1
+) latest ON true
+ORDER BY a.last_seen DESC,a.id`, (page-1)*50, seeHardware)
 	if err != nil {
 		agentUnavailable(w, r)
 		return
 	}
 	items, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (map[string]any, error) {
-		var id, device, host, family, arch, version, status, assetID, assetNumber string
+		var id, device, host, family, arch, version, status, assetID, assetNumber, osName, serial string
 		var seen time.Time
 		var scanned *time.Time
-		err := row.Scan(&id, &device, &host, &family, &arch, &version, &seen, &scanned, &assetID, &assetNumber, &status)
+		err := row.Scan(&id, &device, &host, &family, &arch, &version, &seen, &scanned, &assetID, &assetNumber, &osName, &serial, &status)
 		if !seeAssets {
 			assetID, assetNumber = "", ""
 		}
-		return map[string]any{"id": id, "deviceId": device, "hostname": host, "osFamily": family, "architecture": arch, "version": version, "lastSeen": seen, "lastInventoryAt": scanned, "status": status, "assetId": assetID, "assetNumber": assetNumber}, err
+		return map[string]any{"id": id, "deviceId": device, "hostname": host, "osFamily": family, "osName": osName, "serial": serial, "architecture": arch, "version": version, "lastSeen": seen, "lastInventoryAt": scanned, "status": status, "assetId": assetID, "assetNumber": assetNumber}, err
 	})
 	if err != nil {
 		agentUnavailable(w, r)
@@ -348,6 +367,54 @@ FROM endpoint_agent a JOIN inventory_device d ON d.id=a.device_id LEFT JOIN asse
 	}
 	if items == nil {
 		items = []map[string]any{}
+	}
+	next := len(items) > 50 && page < 100000
+	if len(items) > 50 {
+		items = items[:50]
+	}
+	reply(w, 200, map[string]any{"items": items, "hasNext": next})
+}
+
+func readInventoryHistory(w http.ResponseWriter, r *http.Request, pool *pgxpool.Pool, seeSoftware bool) {
+	id, ok := readAgentID(w, r)
+	if !ok {
+		return
+	}
+	page, ok := agentsPage(w, r)
+	if !ok {
+		return
+	}
+	var exists bool
+	if err := pool.QueryRow(r.Context(), "SELECT EXISTS (SELECT 1 FROM endpoint_agent WHERE id=$1)", id).Scan(&exists); err != nil {
+		agentUnavailable(w, r)
+		return
+	}
+	if !exists {
+		fail(w, r, 404, "AGENT_NOT_FOUND", "This agent could not be found.")
+		return
+	}
+	rows, err := pool.Query(r.Context(), `SELECT run_id::text, scanned_at, received_at,
+coalesce(payload->>'agentVersion',''), CASE WHEN $3::boolean THEN coalesce(payload->>'softwareStatus','') ELSE '' END
+FROM inventory_snapshot WHERE agent_id=$1 ORDER BY scanned_at DESC,received_at DESC,run_id DESC LIMIT 51 OFFSET $2`, id, (page-1)*50, seeSoftware)
+	if err != nil {
+		agentUnavailable(w, r)
+		return
+	}
+	type scan struct {
+		RunID          string    `json:"runId"`
+		ScannedAt      time.Time `json:"scannedAt"`
+		ReceivedAt     time.Time `json:"receivedAt"`
+		AgentVersion   string    `json:"agentVersion"`
+		SoftwareStatus string    `json:"softwareStatus,omitempty"`
+	}
+	items, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (scan, error) {
+		var item scan
+		err := row.Scan(&item.RunID, &item.ScannedAt, &item.ReceivedAt, &item.AgentVersion, &item.SoftwareStatus)
+		return item, err
+	})
+	if err != nil {
+		agentUnavailable(w, r)
+		return
 	}
 	next := len(items) > 50 && page < 100000
 	if len(items) > 50 {
