@@ -80,9 +80,9 @@ function Get-PostgresInstallation {
         $data = $Matches[1]
         $postgres = Join-Path $bin 'postgres.exe'
         if (!(Test-Path -LiteralPath $postgres)) { continue }
-        $configuredPort = & $postgres -D $data -C port
+        $configuredPort = & $postgres -C port -D $data
         if ($LASTEXITCODE -ne 0 -or "$configuredPort".Trim() -ne "$Port") { continue }
-        $hba = & $postgres -D $data -C hba_file
+        $hba = & $postgres -C hba_file -D $data
         if ($LASTEXITCODE -ne 0) { throw 'Cannot locate PostgreSQL authentication configuration.' }
         $hba = "$hba".Trim()
         if (![IO.Path]::IsPathRooted($hba)) { $hba = Join-Path $data $hba }
@@ -219,7 +219,7 @@ function Get-CryolDatabasePassword {
     if ($uri.Scheme -ne 'postgres' -or $uri.Host -ne '127.0.0.1' -or $uri.Port -ne $Port -or $uri.AbsolutePath -ne '/cryol' -or $uri.Query -ne '?sslmode=disable') {
         throw 'This launcher supports only postgres://cryol:...@127.0.0.1:PORT/cryol. Existing .env was preserved.'
     }
-    $parts = $uri.UserInfo.Split(@(':'), 2)
+    $parts = $uri.UserInfo -split ':', 2
     if ($parts.Count -ne 2 -or $parts[0] -ne 'cryol') { throw 'The local launcher requires the dedicated cryol database role.' }
     return [Uri]::UnescapeDataString($parts[1])
 }

@@ -46,6 +46,7 @@ try {
     Assert-Throws { Reset-LocalPostgresPassword $hba 'test-only-secret' } 'Recovery failure was not propagated.'
     Assert-Equal ([Convert]::ToBase64String([IO.File]::ReadAllBytes($hba))) ([Convert]::ToBase64String($original)) 'Authentication file was not restored byte-for-byte.'
     Set-Item Function:Invoke-DatabaseSql $oldSql
+    Assert-Throws { Invoke-Native 'powershell.exe' @('-NoProfile', '-Command', 'exit 7') } 'Native nonzero exit was ignored.'
     Assert-Throws { Invoke-Native 'definitely-missing-cryol-test-command' @() } 'Native command failure was ignored.'
     Write-Host 'Setup parsing, credential encoding, env preservation, and recovery rollback checks passed.'
 }
