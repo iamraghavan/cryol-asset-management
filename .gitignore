@@ -10,3 +10,9 @@ test-results/
 
 *.local.txt
 /cryol-local-cert.pem
+
+# Local Windows server runtime and .NET build outputs
+/.cryol-local/
+/installer/windows/server/bin/
+/installer/windows/server/obj/
+/artifacts/

@@ -1,0 +1,72 @@
+name: Windows server setup
+on:
+  push:
+    paths:
+      - 'installer/windows/server/**'
+      - '.github/workflows/windows-server-setup.yml'
+      - 'apps/server/**'
+  pull_request:
+    paths:
+      - 'installer/windows/server/**'
+      - '.github/workflows/windows-server-setup.yml'
+      - 'apps/server/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-package:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+      - name: Validate script using Windows PowerShell 5.1
+        shell: powershell
+        run: ./installer/windows/server/Test-Setup.ps1
+      - name: Publish self-contained Windows EXE and DLL
+        shell: pwsh
+        run: |
+          dotnet publish installer/windows/server/CryolSetup.csproj -c Release -r win-x64 --self-contained true -o artifacts/CryolSetup-win-x64
+          if ($LASTEXITCODE -ne 0) { throw 'Launcher compilation failed.' }
+          if (!(Test-Path artifacts/CryolSetup-win-x64/CryolSetup.exe)) { throw 'EXE missing.' }
+          if (!(Test-Path artifacts/CryolSetup-win-x64/CryolSetup.dll)) { throw 'DLL missing.' }
+          dotnet artifacts/CryolSetup-win-x64/CryolSetup.dll --help
+          if ($LASTEXITCODE -ne 0) { throw 'Launcher smoke test failed.' }
+          Copy-Item installer/windows/server/README.md artifacts/CryolSetup-win-x64/README.md
+          Copy-Item installer/windows/server/Setup-Cryol.ps1 artifacts/CryolSetup-win-x64/Setup-Cryol.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CryolSetup-win-x64
+          path: artifacts/CryolSetup-win-x64/
+          if-no-files-found: error
+          retention-days: 30
+
+  database-integration:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ci-only-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: apps/server/go.mod
+          cache-dependency-path: apps/server/go.sum
+      - name: Exercise provisioning, migration, and readiness
+        shell: pwsh
+        env:
+          CRYOL_CI_POSTGRES_PASSWORD: ci-only-password
+        run: ./installer/windows/server/Test-Database.ps1
