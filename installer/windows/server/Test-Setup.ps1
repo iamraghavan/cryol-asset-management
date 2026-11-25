@@ -54,3 +54,6 @@ finally {
     # Only this test invocation's uniquely named directory is deleted.
     Remove-Item -LiteralPath $testRoot -Recurse -Force
 }
+
+# Expected native failures above must not become the CI script's exit code.
+$global:LASTEXITCODE = 0

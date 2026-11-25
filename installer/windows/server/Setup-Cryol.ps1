@@ -27,7 +27,9 @@ function Read-Secret {
 function Protect-LocalPath {
     param([string]$Path)
     $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-    Invoke-Native 'icacls.exe' @($Path, '/inheritance:r', '/grant:r', ('*' + $sid + ':(F)'), '*S-1-5-18:(F)', '*S-1-5-32-544:(F)') | Out-Null
+    $rights = if (Test-Path -LiteralPath $Path -PathType Container) { ':(OI)(CI)F' } else { ':(F)' }
+    Invoke-Native 'icacls.exe' @($Path, '/inheritance:r', '/grant:r',
+        ('*' + $sid + $rights), ('*S-1-5-18' + $rights), ('*S-1-5-32-544' + $rights)) | Out-Null
 }
 function Refresh-ToolPath {
     $env:Path = [Environment]::GetEnvironmentVariable('Path', 'Machine') + ';' +
@@ -116,6 +118,10 @@ function Ensure-Postgres {
         $installation = Get-PostgresInstallation $Port
         if (!$installation) { throw 'PostgreSQL installation did not register the expected service.' }
     }
+    $psqlVersion = & (Join-Path $installation.Bin 'psql.exe') --version
+    if ($LASTEXITCODE -ne 0 -or $psqlVersion -notmatch 'PostgreSQL\) (\d+)') { throw 'Cannot determine PostgreSQL version.' }
+    if ([int]$Matches[1] -lt 17) { throw 'PostgreSQL 17 or newer is required. Existing installation was preserved.' }
+    Write-Host $psqlVersion
     Start-Service -Name $installation.Service
     $ready = Join-Path $installation.Bin 'pg_isready.exe'
     $available = $false
