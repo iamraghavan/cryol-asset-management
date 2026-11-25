@@ -26,6 +26,13 @@ jobs:
       - name: Validate script using Windows PowerShell 5.1
         shell: powershell
         run: ./installer/windows/server/Test-Setup.ps1
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: apps/server/go.mod
+          cache-dependency-path: apps/server/go.sum
+      - name: Build all agent download targets on Windows
+        shell: powershell
+        run: ./installer/windows/server/Test-AgentDownloads.ps1
       - name: Publish self-contained Windows EXE and DLL
         shell: pwsh
         run: |

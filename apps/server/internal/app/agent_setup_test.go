@@ -3,6 +3,7 @@ package app
 import (
 	"archive/zip"
 	"bytes"
+	"encoding/json"
 	"io"
 	"net/http/httptest"
 	"os"
@@ -173,6 +174,59 @@ func TestDesktopBundleBinaryNames(t *testing.T) {
 			}[platform]
 			if !strings.Contains(string(script), "!= '"+want+"'") {
 				t.Fatalf("launcher is missing the platform check for %s", want)
+			}
+		})
+	}
+}
+
+func TestLocalSetupOptionsRequireBinaryAndHTTPOptIn(t *testing.T) {
+	for _, example := range []struct {
+		name    string
+		staged  bool
+		enabled bool
+	}{
+		{"missing binary", false, true},
+		{"HTTP opt-in disabled", true, false},
+		{"local download ready", true, true},
+	} {
+		t.Run(example.name, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv("CRYOL_AGENT_DOWNLOAD_DIR", dir)
+			t.Setenv("CRYOL_AGENT_SETUP_ORIGIN", "")
+			t.Setenv("CRYOL_AGENT_SETUP_CA", "")
+			t.Setenv("CRYOL_WINDOWS_AGENT_INSTALLER", "")
+			t.Setenv("CRYOL_AGENT_LOCAL_HTTP", "0")
+			if example.enabled {
+				t.Setenv("CRYOL_AGENT_LOCAL_HTTP", "1")
+			}
+			if example.staged {
+				if err := os.WriteFile(filepath.Join(dir, "cryol-agent.exe"), []byte("test agent"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			r := httptest.NewRequest("GET", "http://127.0.0.1:8080/api/v1/agents/setup", nil)
+			r.RemoteAddr = "127.0.0.1:12345"
+			w := httptest.NewRecorder()
+			setupOptions(w, r)
+			if w.Code != 200 {
+				t.Fatalf("setup options returned %d", w.Code)
+			}
+			var options struct {
+				Platforms        []string
+				WindowsInstaller bool
+			}
+			if err := json.Unmarshal(w.Body.Bytes(), &options); err != nil {
+				t.Fatal(err)
+			}
+			if example.staged && example.enabled {
+				if len(options.Platforms) != 1 || options.Platforms[0] != "windows" {
+					t.Fatalf("staged local agent not advertised: %v", options.Platforms)
+				}
+			} else if len(options.Platforms) != 0 {
+				t.Fatalf("unavailable agent advertised: %v", options.Platforms)
+			}
+			if options.WindowsInstaller {
+				t.Fatal("native installer must not be advertised for HTTP")
 			}
 		})
 	}

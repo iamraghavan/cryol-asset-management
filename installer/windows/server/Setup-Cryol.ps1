@@ -230,6 +230,67 @@ function Get-CryolDatabasePassword {
     return [Uri]::UnescapeDataString($parts[1])
 }
 
+function Build-CryolAgentDownloads {
+    param([string]$Root, [string]$Directory)
+    New-Item -ItemType Directory -Path $Directory -Force | Out-Null
+    $previous = @{}
+    foreach ($key in @('GOOS', 'GOARCH', 'CGO_ENABLED')) {
+        $previous[$key] = [Environment]::GetEnvironmentVariable($key, 'Process')
+    }
+    $targets = @(
+        @{ OS = 'windows'; Arch = 'amd64'; File = 'cryol-agent.exe' },
+        @{ OS = 'linux'; Arch = 'amd64'; File = 'cryol-agent' },
+        @{ OS = 'linux'; Arch = 'arm64'; File = 'cryol-agent-linux-arm64' },
+        @{ OS = 'darwin'; Arch = 'amd64'; File = 'cryol-agent-macos-intel' },
+        @{ OS = 'darwin'; Arch = 'arm64'; File = 'cryol-agent-macos-arm64' }
+    )
+    Push-Location (Join-Path $Root 'apps/server')
+    try {
+        $env:CGO_ENABLED = '0'
+        foreach ($target in $targets) {
+            $env:GOOS = $target.OS
+            $env:GOARCH = $target.Arch
+            Write-Host ("Building agent download: " + $target.File)
+            $output = Join-Path $Directory $target.File
+            Invoke-Native 'go.exe' @('build', '-buildvcs=false', '-trimpath', '-o', $output, './cmd/cryol-agent')
+            if (!(Test-Path -LiteralPath $output -PathType Leaf) -or (Get-Item -LiteralPath $output).Length -eq 0) {
+                throw ("Agent build is missing: " + $target.File)
+            }
+        }
+    }
+    finally {
+        Pop-Location
+        foreach ($key in $previous.Keys) {
+            [Environment]::SetEnvironmentVariable($key, $previous[$key], 'Process')
+        }
+    }
+}
+function Enable-CryolLocalAgentDownloads {
+    param([string]$EnvPath, [string]$Directory)
+    if (!(Test-Path -LiteralPath $EnvPath -PathType Leaf)) { throw 'Configure the database .env before agent downloads.' }
+    if (!$Directory -or $Directory -match "[\r\n']") { throw 'Agent download directory contains unsupported characters.' }
+    $content = [IO.File]::ReadAllText($EnvPath)
+    $settings = [ordered]@{
+        CRYOL_AGENT_DOWNLOAD_DIR = $Directory
+        CRYOL_AGENT_LOCAL_HTTP = '1'
+    }
+    foreach ($key in $settings.Keys) {
+        $line = $key + "='" + $settings[$key] + "'"
+        $pattern = '(?m)^[ \t]*' + [regex]::Escape($key) + '[ \t]*=[^\r\n]*'
+        if ([regex]::IsMatch($content, $pattern)) {
+            # A delegate preserves literal dollar signs in Windows directory names.
+            $content = [regex]::Replace($content, $pattern, [Text.RegularExpressions.MatchEvaluator]{ param($match) $line })
+        }
+        else {
+            if ($content -and !$content.EndsWith([Environment]::NewLine)) { $content += [Environment]::NewLine }
+            $content += $line + [Environment]::NewLine
+        }
+        [Environment]::SetEnvironmentVariable($key, $settings[$key], 'Process')
+    }
+    Protect-LocalPath $EnvPath
+    [IO.File]::WriteAllText($EnvPath, $content, [Text.UTF8Encoding]::new($false))
+}
+
 function Start-CryolSetup {
     $principal = [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())
     if (!$principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
@@ -320,15 +381,13 @@ function Start-CryolSetup {
     $listeners = @(Get-NetTCPConnection -LocalPort $AppPort -State Listen -ErrorAction SilentlyContinue)
     if ($listeners.Count -gt 0) {
         $owner = Get-Process -Id $listeners[0].OwningProcess -ErrorAction Stop
-        if ($owner.Path -eq $server) {
-            $response = Invoke-RestMethod "http://127.0.0.1:$AppPort/api/v1/system/readiness" -TimeoutSec 5
-            if ($response.status -eq 'ready') {
-                Write-Host "Cryol is already ready at http://127.0.0.1:$AppPort"
-                if (!$NoBrowser) { Start-Process "http://127.0.0.1:$AppPort" }
-                return
-            }
+        if ($owner.Path -ne $server) {
+            throw "Port $AppPort is occupied. Stop that process or choose -AppPort with an unused port."
         }
-        throw "Port $AppPort is occupied. Stop that process or choose -AppPort with an unused port."
+        Write-Host 'Stopping this checkout server so setup can apply updated environment and binaries.'
+        Stop-Process -Id $owner.Id -ErrorAction Stop
+        Wait-Process -Id $owner.Id -Timeout 15 -ErrorAction SilentlyContinue
+        if (Get-Process -Id $owner.Id -ErrorAction SilentlyContinue) { throw 'The existing Cryol server did not stop.' }
     }
     if ([int]$tables -gt 0) {
         $backups = Join-Path $env:LOCALAPPDATA 'Cryol\backups'
@@ -347,6 +406,17 @@ function Start-CryolSetup {
     Invoke-Native 'corepack.cmd' @('pnpm', 'install', '--frozen-lockfile')
     Invoke-Native 'corepack.cmd' @('pnpm', 'build')
     if (!(Test-Path -LiteralPath (Join-Path $env:CRYOL_WEB_DIR 'index.html'))) { throw 'Frontend index.html is missing.' }
+    $defaultDownloads = Join-Path $local 'agent-binaries'
+    $downloadDirectory = $env:CRYOL_AGENT_DOWNLOAD_DIR
+    if (!$downloadDirectory -or $downloadDirectory -eq $defaultDownloads) {
+        $downloadDirectory = $defaultDownloads
+        Build-CryolAgentDownloads $ProjectPath $downloadDirectory
+    }
+    elseif (!(Test-Path -LiteralPath (Join-Path $downloadDirectory 'cryol-agent.exe') -PathType Leaf)) {
+        throw 'The custom CRYOL_AGENT_DOWNLOAD_DIR has no Windows agent. Stage its binaries, or remove that setting to let local setup build them.'
+    }
+    Enable-CryolLocalAgentDownloads $envFile $downloadDirectory
+    Write-Host 'Agent ZIP downloads enabled for testing on this laptop. Separate endpoints require LAN HTTPS.'
     Push-Location 'apps/server'
     try {
         $cli = Join-Path $local 'cryol-cli.exe'
@@ -403,7 +473,7 @@ exit $LASTEXITCODE
     Write-Host "READY: http://127.0.0.1:$AppPort"
     Write-Host "Server PID: $($process.Id). Stop with: Stop-Process -Id $($process.Id)"
     Write-Host ('Restart later: powershell -NoProfile -ExecutionPolicy Bypass -File "' + $local + '\Start-Cryol.ps1"')
-    Write-Host 'Database, schema, frontend, and HTTP readiness checks passed.'
+    Write-Host 'Database, schema, frontend, agent binaries, and HTTP readiness checks passed.'
     if (!$NoBrowser) { Start-Process "http://127.0.0.1:$AppPort" }
     if (!$NoBrowser) { Read-Host 'Setup complete. Press Enter to close this window' | Out-Null }
 }

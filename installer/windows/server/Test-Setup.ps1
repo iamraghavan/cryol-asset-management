@@ -36,6 +36,15 @@ try {
     $before = [IO.File]::ReadAllText($envPath)
     Assert-Throws { Export-CryolEnvironment $envPath 'other' 5432 8080 'C:\other' } 'Existing .env must not be overwritten.'
     Assert-Equal ([IO.File]::ReadAllText($envPath)) $before 'Existing .env was changed.'
+    $downloadDirectory = 'C:\Project With $dollar\agent-binaries'
+    Enable-CryolLocalAgentDownloads $envPath $downloadDirectory
+    Import-CryolEnvironment $envPath
+    Assert-Equal $env:CRYOL_DATABASE_URL $url 'Agent repair changed database credentials.'
+    Assert-Equal $env:CRYOL_AGENT_DOWNLOAD_DIR $downloadDirectory 'Agent directory was not persisted literally.'
+    Assert-Equal $env:CRYOL_AGENT_LOCAL_HTTP '1' 'Same-machine downloads were not enabled.'
+    $once = [IO.File]::ReadAllText($envPath)
+    Enable-CryolLocalAgentDownloads $envPath $downloadDirectory
+    Assert-Equal ([IO.File]::ReadAllText($envPath)) $once 'Agent environment repair is not idempotent.'
     Set-Item Function:Protect-LocalPath $oldProtect
     # Exercise cleanup even when authentication recovery fails.
     $hba = Join-Path $testRoot 'pg_hba.conf'

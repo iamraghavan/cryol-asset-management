@@ -62,7 +62,12 @@ require an interactive terminal.
 - Before migrating an existing Cryol schema, writes a custom-format pg_dump backup
   to %LOCALAPPDATA%\Cryol\backups and checks its archive table of contents.
   Backups contain private data and must be stored securely.
-- Builds the frontend and Go EXEs; runs migrate and schema-check directly, without
+- Builds the frontend, server, CLI, and all five desktop agent binaries. Configures
+  CRYOL_AGENT_DOWNLOAD_DIR and CRYOL_AGENT_LOCAL_HTTP=1 so Agent downloads lists ZIPs
+  when the console is opened on this laptop. Existing database configuration and
+  custom agent directories are preserved. Custom directories must contain their
+  own Windows agent binary.
+- Runs migrate and schema-check directly, without
   invoking cryol-cli setup. Bootstraps an application administrator only if no users
   exist. Existing application accounts are preserved.
 - Runs the server as a hidden background process and checks HTTP readiness.
@@ -87,7 +92,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File 'F:\Projects\Cryol\.cryol-lo
 
 Replace the example path with your project folder. Keep that terminal open.
 Alternatively rerun the setup launcher. A running server from the same checkout
-is detected and left running. To rebuild after a source update, stop it first.
+is stopped before backup and migration, then restarted after a successful build.
+This applies repaired environment settings to an already-running installation.
+Other processes occupying the selected port are left running.
 
 The setup completion message prints the server PID and Stop-Process command.
 Startup logs are .cryol-local\server.out.log and .cryol-local\server.err.log.
@@ -129,3 +136,21 @@ Password recovery needs write access to the matched service's pg_hba.conf.
 Do not interrupt the process while recovery is active. A uniquely named original
 configuration backup remains beside pg_hba.conf for recovery if Windows or the
 process is forcibly terminated.
+
+## Repair missing agent downloads on an existing laptop
+
+Download the latest CryolSetup-win-x64 artifact and rerun it against the same
+project folder. Use the existing PostgreSQL port (for example -DatabasePort 5000)
+and application port. Existing database contents and application accounts remain.
+
+Setup now stages Windows x64, Linux x64/ARM64, and macOS Intel/Apple silicon agent
+binaries in .cryol-local\agent-binaries, enables same-machine downloads in .env,
+and restarts its own server. Refresh **Endpoint agents > Agent downloads** to see
+the available ZIPs. Building Go agents restores GOOS, GOARCH, and CGO_ENABLED
+before compiling the server.
+
+Loopback HTTP ZIPs are only for an agent on the server laptop. To manage a separate
+computer, configure reachable LAN HTTPS and download from that address as described
+in docs/operations/endpoint-agents.md. The separate native Windows installer EXE
+still requires HTTPS and CRYOL_WINDOWS_AGENT_INSTALLER pointing to a staged NSIS
+installer. Local setup stages ZIP binaries; it does not create that NSIS installer.
